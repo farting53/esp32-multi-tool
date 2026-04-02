@@ -1,0 +1,16 @@
+In file included from C:\Users\fc123\AppData\Local\Arduino15\packages\esp32\tools\esp32-libs\3.3.7/include/bt/include/esp32/include/esp_bt.h:16,
+                 from C:\Users\fc123\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.3.7\libraries\BLE\src/BLEDevice.h:27,
+                 from C:\Users\fc123\AppData\Local\Temp\.arduinoIDE-unsaved202631-8196-g12tri.9w22\sketch_apr1a\sketch_apr1a.ino:14:
+C:/Users/fc123/AppData/Local/Arduino15/packages/esp32/tools/esp32-libs/3.3.7/include/controller/esp32/esp_bredr_cfg.h:18:95: note: '#pragma message: BT: forcing BR/EDR max sync conn eff to 1 (Bluedroid HFP requires SCO/eSCO)'
+   18 | #pragma message ("BT: forcing BR/EDR max sync conn eff to 1 (Bluedroid HFP requires SCO/eSCO)")
+      |                                                                                               ^
+C:\Users\fc123\AppData\Local\Temp\.arduinoIDE-unsaved202631-8196-g12tri.9w22\sketch_apr1a\sketch_apr1a.ino: In member function 'virtual void MyBLECB::onResult(BLEAdvertisedDevice)':
+C:\Users\fc123\AppData\Local\Temp\.arduinoIDE-unsaved202631-8196-g12tri.9w22\sketch_apr1a\sketch_apr1a.ino:185:15: error: 'class String' has no member named 'size'
+  185 |       if (mfr.size() >= 2) {
+      |               ^~~~
+C:\Users\fc123\AppData\Local\Temp\.arduinoIDE-unsaved202631-8196-g12tri.9w22\sketch_apr1a\sketch_apr1a.ino:191:55: error: conversion from 'String' to non-scalar type 'std::string' {aka 'std::__cxx11::basic_string<char>'} requested
+  191 |       std::string uuid = dev.getServiceUUID().toString();
+      |                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~
+exit status 1
+
+Compilation error: 'class String' has no member named 'size'
