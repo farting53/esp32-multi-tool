@@ -1,5 +1,5 @@
 // =============================================================
-// ESP32 MULTI-TOOL v2.4
+// ESP32 MULTI-TOOL v2.5
 // =============================================================
 // BUTTON (GPIO0 built-in BOOT):
 //   Single click  = scroll down / next / ch+
@@ -8,13 +8,11 @@
 //   Hold 700ms    = cycle ALL modes on screen, release to enter
 //
 // SWITCHES (only two working switches used):
-//   D32 = BLE Scanner shortcut
+//   D32 = Jammer shortcut
 //   D33 = WiFi Deauther shortcut
-//   All other modes → hold button to cycle and select
-//   Jammer, Evil Twin, NRF Cap, NRF Replay → hold button only
+//   Evil Twin, NRF Cap, NRF Replay → hold button to cycle and select
 //
 // BUTTON MAP PER MODE:
-//   BLE      : 1=next  2=rescan     3=prev
 //   Deauth   : 1=next  2=fire on/off  3=rescan
 //   EvilTwin : 1=next SSID  2=launch/stop  3=creds on OLED
 //   NRF Cap  : 1=ch+  2=ch-  3=clear buffer
@@ -42,9 +40,6 @@
 #include <RF24.h>
 #include <WiFi.h>
 #include "esp_wifi.h"
-#include <BLEDevice.h>
-#include <BLEScan.h>
-#include <BLEAdvertisedDevice.h>
 #include <DNSServer.h>
 #include <WebServer.h>
 #include <SPIFFS.h>
@@ -60,8 +55,8 @@
 #define LED_BLUE   25
 #define LED_GREEN  26
 #define LED_YELLOW 27
-#define SW_BLE      32   // working — internal pullup
-#define SW_DEAUTH   33   // working — internal pullup
+#define SW_JAMMER   32   // working — internal pullup → Jammer shortcut
+#define SW_DEAUTH   33   // working — internal pullup → Deauther shortcut
 // D34, D35, VP removed — input-only pins with no pullup, unreliable
 #define BOOT_BTN    0
 
@@ -73,7 +68,6 @@ RF24 radio(NRF_CE, NRF_CSN);
 
 enum AppMode {
   MODE_IDLE = 0,
-  MODE_BLE_SCAN,
   MODE_DEAUTH,
   MODE_EVIL_TWIN,
   MODE_NRF_CAPTURE,
@@ -130,15 +124,15 @@ void updateBoot() {
 // =============================================================
 // MODE CYCLING (hold, no switches active)
 // =============================================================
-const char* cycleLabels[] = { "BLE SCAN","DEAUTHER","EVIL TWIN","NRF CAP","NRF PLAY","JAMMER" };
-AppMode     cycleModes[]  = { MODE_BLE_SCAN, MODE_DEAUTH, MODE_EVIL_TWIN,
+const char* cycleLabels[] = { "DEAUTHER","EVIL TWIN","NRF CAP","NRF PLAY","JAMMER" };
+AppMode     cycleModes[]  = { MODE_DEAUTH, MODE_EVIL_TWIN,
                                MODE_NRF_CAPTURE, MODE_NRF_REPLAY, MODE_JAMMER };
-const int   NUM_CYCLE     = 6;
+const int   NUM_CYCLE     = 5;
 int         holdCycleIdx  = 0;
 unsigned long holdCycleLast = 0;
 
 AppMode getSwitchMode() {
-  if (digitalRead(SW_BLE)    == LOW) return MODE_BLE_SCAN;
+  if (digitalRead(SW_JAMMER) == LOW) return MODE_JAMMER;
   if (digitalRead(SW_DEAUTH) == LOW) return MODE_DEAUTH;
   return MODE_IDLE;
 }
@@ -173,8 +167,8 @@ void drawIdle() {
   display.setCursor(22,0); display.print("[ MULTI-TOOL ]");
 
   // Show the two working switches
-  const char* lbl[] = { "BLE","DEAUTH" };
-  const int   pins[]= { SW_BLE, SW_DEAUTH };
+  const char* lbl[] = { "JAMMER","DEAUTH" };
+  const int   pins[]= { SW_JAMMER, SW_DEAUTH };
   for (int i = 0; i < 2; i++) {
     bool on = (digitalRead(pins[i]) == LOW);
     int col = i * 68;
@@ -194,85 +188,6 @@ void drawIdle() {
   display.setCursor(0, 47); display.print("Release:  enter mode");
   display.setCursor(0, 57); display.print("Triple:   exit mode");
   display.display();
-}
-
-// =============================================================
-// BLE SCANNER
-// 1=scroll next  2=rescan  3=scroll prev
-// =============================================================
-struct BLEEntry { char mac[18]; char type[8]; int rssi; };
-#define MAX_BLE 30
-BLEEntry bleList[MAX_BLE];
-int bleCount=0, bleScroll=0;
-bool bleScanning=false;
-BLEScan* bleScan=nullptr;
-
-class MyBLECB : public BLEAdvertisedDeviceCallbacks {
-  void onResult(BLEAdvertisedDevice dev) {
-    const char* mac = dev.getAddress().toString().c_str();
-    for (int i=0;i<bleCount;i++) {
-      if (strcmp(bleList[i].mac,mac)==0) { bleList[i].rssi=dev.getRSSI(); return; }
-    }
-    if (bleCount >= MAX_BLE) return;
-    BLEEntry& e = bleList[bleCount];
-    strncpy(e.mac,mac,17); e.mac[17]=0;
-    e.rssi=dev.getRSSI(); strcpy(e.type,"GEN");
-    if (dev.haveManufacturerData()) {
-      String mfr = dev.getManufacturerData();
-      if (mfr.length()>=2) {
-        if ((uint8_t)mfr[0]==0x4C&&(uint8_t)mfr[1]==0x00) strcpy(e.type,"APPLE");
-        if ((uint8_t)mfr[0]==0x07&&(uint8_t)mfr[1]==0x01) strcpy(e.type,"TILE");
-      }
-    }
-    if (dev.haveServiceUUID()) {
-      String uuid = dev.getServiceUUID().toString();
-      if (uuid=="00001812-0000-1000-8000-00805f9b34fb") strcpy(e.type,"HID");
-    }
-    bleCount++;
-    if (strcmp(e.type,"APPLE")==0) digitalWrite(LED_RED,HIGH);
-    if (strcmp(e.type,"HID")==0)   digitalWrite(LED_BLUE,HIGH);
-    if (e.rssi>-50)                digitalWrite(LED_YELLOW,HIGH);
-  }
-};
-
-void setupBLE() {
-  BLEDevice::init("");
-  bleScan=BLEDevice::getScan();
-  bleScan->setAdvertisedDeviceCallbacks(new MyBLECB(),true);
-  bleScan->setActiveScan(true); bleScan->setInterval(100); bleScan->setWindow(99);
-}
-
-void bleStartScan() {
-  ledsOff(); bleCount=0; bleScroll=0; bleScanning=true;
-  bleScan->start(5,[](BLEScanResults){bleScanning=false;},false);
-}
-
-void drawBLE() {
-  oledClear();
-  char hdr[22]; snprintf(hdr,22,"BLE [%d]%s",bleCount,bleScanning?" ...":"");
-  oledHeader(hdr);
-  if (bleCount==0) {
-    display.setCursor(8,22); display.print(bleScanning?"Scanning...":"No devices found.");
-    display.setCursor(8,36); display.print("Dbl click to rescan.");
-  } else {
-    for (int i=0;i<3;i++) {
-      int idx=(bleScroll+i)%bleCount;
-      display.setCursor(0,13+i*17);
-      display.printf("%s%-5s %4ddBm", i==0?">":" ", bleList[idx].type, bleList[idx].rssi);
-      display.setCursor(6,13+i*17+8); display.print(bleList[idx].mac);
-    }
-    char nav[22]; snprintf(nav,22,"%d/%d",bleScroll+1,bleCount);
-    display.setCursor(100,57); display.print(nav);
-  }
-  oledFooter("1:dn 2:scan 3:up");
-  display.display();
-}
-
-void handleBLE() {
-  if (evtSingle && bleCount>0) bleScroll=(bleScroll+1)%bleCount;
-  if (evtTriple && bleCount>0) bleScroll=(bleScroll-1+bleCount)%bleCount;
-  if (evtDouble && !bleScanning) bleStartScan();
-  drawBLE();
 }
 
 // =============================================================
@@ -755,7 +670,6 @@ void onModeEnter(AppMode mode) {
       if (twinActive) stopTwin();
       if (nrfCapOn)   nrfStopCap();
       deauthing=false; drawIdle(); break;
-    case MODE_BLE_SCAN:    bleStartScan(); break;
     case MODE_DEAUTH:      initWifi(); apSelected=0; deauthing=false; startWifiScanAsync(); break;
     case MODE_EVIL_TWIN:   credCount=0; twinScroll=0; SPIFFS.begin(true); break;
     case MODE_NRF_CAPTURE: if(nrfReady){nrfCount=0;nrfScroll=0;nrfStartCap();} break;
@@ -771,7 +685,7 @@ void setup() {
   Serial.begin(115200);
   pinMode(LED_RED,OUTPUT); pinMode(LED_BLUE,OUTPUT);
   pinMode(LED_GREEN,OUTPUT); pinMode(LED_YELLOW,OUTPUT);
-  pinMode(SW_BLE,    INPUT_PULLUP);
+  pinMode(SW_JAMMER, INPUT_PULLUP);
   pinMode(SW_DEAUTH, INPUT_PULLUP);
   pinMode(BOOT_BTN,  INPUT_PULLUP);
 
@@ -782,35 +696,41 @@ void setup() {
   display.setCursor(18,8);  display.print("MULTI");
   display.setCursor(14,28); display.print("-TOOL-");
   display.setTextSize(1);
-  display.setCursor(20,50); display.print("v2.3  ESP32+nRF24");
+  display.setCursor(20,50); display.print("v2.5  ESP32+nRF24");
   display.display();
 
   for (int i=0;i<3;i++) {
     for (int p:{LED_RED,LED_BLUE,LED_GREEN,LED_YELLOW}) { digitalWrite(p,HIGH); delay(70); digitalWrite(p,LOW); }
   }
 
-  setupBLE(); setupNRF(); SPIFFS.begin(true);
+  setupNRF(); SPIFFS.begin(true);
   delay(400); drawIdle();
 }
 
 void loop() {
   updateBoot();
 
+  // Hold = cycle ALL modes — process BEFORE switch check so holdEnd enters mode correctly
+  if (evtHoldStart) { holdCycleLast=millis(); drawHoldOverlay(); }
+  if (isHolding && millis()-holdCycleLast>=1000) {
+    holdCycleIdx=(holdCycleIdx+1)%NUM_CYCLE;
+    holdCycleLast=millis(); drawHoldOverlay();
+  }
+  if (evtHoldEnd) {
+    currentMode=cycleModes[holdCycleIdx]; onModeEnter(currentMode);
+    return; // skip switch check this frame so we don't immediately reset to idle
+  }
+
   // Switch-based mode (takes priority over button)
   AppMode sw=getSwitchMode();
   if (sw!=MODE_IDLE && sw!=currentMode) {
     currentMode=sw; onModeEnter(currentMode);
   } else if (sw==MODE_IDLE && currentMode!=MODE_IDLE && !switchActive() && !isHolding) {
-    currentMode=MODE_IDLE; onModeEnter(MODE_IDLE);
+    // Only reset to idle if the current mode was set by a switch (not by hold-cycle)
+    // Check: if the switch that would have activated currentMode is no longer active
+    bool modeFromSwitch = (currentMode==MODE_JAMMER || currentMode==MODE_DEAUTH);
+    if (modeFromSwitch) { currentMode=MODE_IDLE; onModeEnter(MODE_IDLE); }
   }
-
-  // Hold = cycle ALL modes (works regardless of switch state)
-  if (evtHoldStart) { holdCycleLast=millis(); drawHoldOverlay(); }
-  if (isHolding && millis()-holdCycleLast>=600) {
-    holdCycleIdx=(holdCycleIdx+1)%NUM_CYCLE;
-    holdCycleLast=millis(); drawHoldOverlay();
-  }
-  if (evtHoldEnd) { currentMode=cycleModes[holdCycleIdx]; onModeEnter(currentMode); }
 
   // Triple = exit to idle
   if (evtTriple && currentMode!=MODE_IDLE) {
@@ -822,7 +742,6 @@ void loop() {
   switch (currentMode) {
     case MODE_IDLE:
       { static unsigned long li=0; if(millis()-li>500){drawIdle();li=millis();} break; }
-    case MODE_BLE_SCAN:    handleBLE();        break;
     case MODE_DEAUTH:      handleDeauth();     break;
     case MODE_EVIL_TWIN:   handleEvilTwin();   break;
     case MODE_NRF_CAPTURE: handleNRFCapture(); break;

@@ -1,4 +1,4 @@
-# ESP32 Multi-Tool v2.3
+# ESP32 Multi-Tool v2.5
 
 A combined wireless security tool for ESP32 with nRF24L01+PA+LNA, OLED display, LEDs, and toggle switches.
 
@@ -8,7 +8,6 @@ A combined wireless security tool for ESP32 with nRF24L01+PA+LNA, OLED display, 
 
 | Mode | Description |
 |------|-------------|
-| BLE Scanner | Scans nearby BLE devices, identifies Apple, Tile, HID by manufacturer data |
 | WiFi Deauther | Scans APs and sends 802.11 deauth frames to kick clients off WiFi |
 | Evil Twin | Clones a nearby AP (SSID + BSSID + channel), serves captive portal to harvest credentials |
 | nRF24 Capture | Promiscuous capture of 2.4GHz ESB packets (doorbells, RC cars, remote sockets) |
@@ -71,22 +70,19 @@ Slide it back to exit and return to idle.
 
 | Switch | Mode activated |
 |--------|---------------|
-| D32 | BLE Scanner |
+| D32 | Jammer |
 | D33 | WiFi Deauther |
-| D34 | Evil Twin |
-| D35 | nRF24 Capture |
-| VP | nRF24 Replay |
 
 > Only one switch should be ON at a time. If multiple are ON, the first one detected wins (order above).
 
-### Method 2 — Hold Button (for Jammer or when no cables free)
+### Method 2 — Hold Button (for other modes or when no cables free)
 1. Make sure **all switches are OFF** (idle screen showing)
 2. **Hold the BOOT button** (built into ESP32 board, ~700ms)
-3. Mode name appears in a box on screen, **cycling every 600ms**
+3. Mode name appears in a box on screen, **cycling every 1000ms**
 4. **Release** when you see the mode you want → enters it
 5. Triple click to exit back to idle
 
-> Jammer mode is only accessible this way (no dedicated switch).
+> Evil Twin, NRF Cap, and NRF Replay are only accessible this way (no dedicated switch).
 
 ---
 
@@ -102,13 +98,6 @@ The BOOT button (built into the ESP32 board, labeled BOOT or IO0) handles all in
 | Hold | Press and hold ~700ms until screen reacts |
 
 ### Button actions per mode
-
-#### BLE Scanner
-| Button | Action |
-|--------|--------|
-| Single | Scroll to next device |
-| Double | Start a fresh rescan |
-| Triple | Scroll to previous device (or exit if using button nav) |
 
 #### WiFi Deauther
 | Button | Action |
@@ -163,10 +152,10 @@ The BOOT button (built into the ESP32 board, labeled BOOT or IO0) handles all in
 
 | LED | Meaning |
 |-----|---------|
-| RED | Deauth firing / Apple device found / Jammer active (blinks) |
+| RED | Deauth firing / Jammer active (blinks) |
 | BLUE | nRF24 capturing |
 | GREEN | Credential captured by Evil Twin |
-| YELLOW | BLE device very close (<50cm) / nRF24 packet received / Jammer sweep tick |
+| YELLOW | nRF24 packet received / Jammer sweep tick |
 
 ---
 
