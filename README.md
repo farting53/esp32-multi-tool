@@ -22,31 +22,34 @@ A combined wireless security/hacking tool for ESP32 with nRF24L01+PA+LNA, OLED d
 
 ## Wiring
 
+Board label → GPIO number mapping used below.
+
 ```
 OLED (I2C)
-  SDA  → GPIO 21
-  SCL  → GPIO 22
+  SDA  → D21  (GPIO 21)
+  SCL  → D22  (GPIO 22)
 
-nRF24 (VSPI)
-  CE   → GPIO 5
-  CSN  → GPIO 17
-  SCK  → GPIO 18
-  MOSI → GPIO 23
-  MISO → GPIO 19
-  VCC  → 3.3V  ← put 100uF cap across VCC/GND
+nRF24 (VSPI) — put 100uF cap across VCC/GND on each module
+  CE   → D5   (GPIO 5)
+  CSN  → TX2  (GPIO 17)  ← labeled TX2 on board
+  SCK  → D18  (GPIO 18)
+  MOSI → D23  (GPIO 23)
+  MISO → D19  (GPIO 19)
+  VCC  → 3V3
+  GND  → GND
 
-LEDs (220Ω to GND)
-  RED    → GPIO 2
-  BLUE   → GPIO 25
-  GREEN  → GPIO 26
-  YELLOW → GPIO 27
+LEDs (220Ω resistor in series to GND)
+  RED    → D2   (GPIO 2)
+  BLUE   → D25  (GPIO 25)
+  GREEN  → D26  (GPIO 26)
+  YELLOW → D27  (GPIO 27)
 
-Switches (active LOW)
-  SW_UP     → GPIO 32  (internal pullup)
-  SW_DOWN   → GPIO 33  (internal pullup)
-  SW_SELECT → GPIO 34  (external 10kΩ to 3.3V required)
-  SW_BACK   → GPIO 35  (external 10kΩ to 3.3V required)
-  SW_FIRE   → GPIO 36  (external 10kΩ to 3.3V required)
+Switches (active LOW — connect pin to GND when pressed)
+  SW_UP     → D32  (GPIO 32) — internal pullup, no resistor needed
+  SW_DOWN   → D33  (GPIO 33) — internal pullup, no resistor needed
+  SW_SELECT → D34  (GPIO 34) — input-only, needs 10kΩ from pin to 3V3
+  SW_BACK   → D35  (GPIO 35) — input-only, needs 10kΩ from pin to 3V3
+  SW_FIRE   → VP   (GPIO 36) — input-only, needs 10kΩ from pin to 3V3
 ```
 
 ## Controls
