@@ -1,18 +1,17 @@
 // =============================================================
-// ESP32 MULTI-TOOL v2.3
+// ESP32 MULTI-TOOL v2.4
 // =============================================================
 // BUTTON (GPIO0 built-in BOOT):
 //   Single click  = scroll down / next / ch+
 //   Double click  = primary action
-//   Triple click  = secondary action (switch mode) OR exit (button mode)
-//   Hold 700ms    = cycle modes on screen, release to enter
-//                   (only works when all switches are OFF)
+//   Triple click  = secondary action OR exit back to idle
+//   Hold 700ms    = cycle ALL modes on screen, release to enter
 //
-// SWITCHES (slide to active position = LOW):
-//   D32 = BLE Scanner      D33 = WiFi Deauther
-//   D34 = Evil Twin        D35 = nRF24 Capture
-//   VP  = nRF24 Replay
-//   Jammer = hold-button cycle only (no switch needed)
+// SWITCHES (only two working switches used):
+//   D32 = BLE Scanner shortcut
+//   D33 = WiFi Deauther shortcut
+//   All other modes → hold button to cycle and select
+//   Jammer, Evil Twin, NRF Cap, NRF Replay → hold button only
 //
 // BUTTON MAP PER MODE:
 //   BLE      : 1=next  2=rescan     3=prev
@@ -61,11 +60,9 @@
 #define LED_BLUE   25
 #define LED_GREEN  26
 #define LED_YELLOW 27
-#define SW_BLE      32
-#define SW_DEAUTH   33
-#define SW_TWIN     34
-#define SW_NRF_CAP  35
-#define SW_NRF_REP  36
+#define SW_BLE      32   // working — internal pullup
+#define SW_DEAUTH   33   // working — internal pullup
+// D34, D35, VP removed — input-only pins with no pullup, unreliable
 #define BOOT_BTN    0
 
 #define SCREEN_W 128
@@ -141,11 +138,8 @@ int         holdCycleIdx  = 0;
 unsigned long holdCycleLast = 0;
 
 AppMode getSwitchMode() {
-  if (digitalRead(SW_BLE)     == LOW) return MODE_BLE_SCAN;
-  if (digitalRead(SW_DEAUTH)  == LOW) return MODE_DEAUTH;
-  if (digitalRead(SW_TWIN)    == LOW) return MODE_EVIL_TWIN;
-  if (digitalRead(SW_NRF_CAP) == LOW) return MODE_NRF_CAPTURE;
-  if (digitalRead(SW_NRF_REP) == LOW) return MODE_NRF_REPLAY;
+  if (digitalRead(SW_BLE)    == LOW) return MODE_BLE_SCAN;
+  if (digitalRead(SW_DEAUTH) == LOW) return MODE_DEAUTH;
   return MODE_IDLE;
 }
 bool switchActive() { return getSwitchMode() != MODE_IDLE; }
@@ -177,21 +171,28 @@ void ledsOff() { digitalWrite(LED_RED,LOW); digitalWrite(LED_BLUE,LOW); digitalW
 void drawIdle() {
   oledClear();
   display.setCursor(22,0); display.print("[ MULTI-TOOL ]");
-  const char* lbl[] = { "BLE","DAUTH","TWIN","CAP","REP" };
-  const int   pins[]= { SW_BLE, SW_DEAUTH, SW_TWIN, SW_NRF_CAP, SW_NRF_REP };
-  for (int i = 0; i < 5; i++) {
-    int col = (i%3)*43, row = 12+(i/3)*18;
+
+  // Show the two working switches
+  const char* lbl[] = { "BLE","DEAUTH" };
+  const int   pins[]= { SW_BLE, SW_DEAUTH };
+  for (int i = 0; i < 2; i++) {
     bool on = (digitalRead(pins[i]) == LOW);
-    display.setCursor(col,row); display.printf("%-5s",lbl[i]);
-    display.setCursor(col,row+9);
+    int col = i * 68;
+    display.setCursor(col, 12); display.print(lbl[i]);
     if (on) {
-      display.fillRect(col,row+8,36,9,SSD1306_WHITE);
+      display.fillRect(col, 21, 55, 9, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
-      display.setCursor(col+4,row+9); display.print(" ON ");
+      display.setCursor(col+4, 22); display.print("[ ON  ]");
       display.setTextColor(SSD1306_WHITE);
-    } else { display.print(" off"); }
+    } else {
+      display.setCursor(col, 22); display.print("[ off ]");
+    }
   }
-  display.setCursor(0,50); display.print("hold btn to pick mode");
+
+  display.drawLine(0, 33, 128, 33, SSD1306_WHITE);
+  display.setCursor(0, 37); display.print("Hold btn: cycle modes");
+  display.setCursor(0, 47); display.print("Release:  enter mode");
+  display.setCursor(0, 57); display.print("Triple:   exit mode");
   display.display();
 }
 
@@ -770,9 +771,9 @@ void setup() {
   Serial.begin(115200);
   pinMode(LED_RED,OUTPUT); pinMode(LED_BLUE,OUTPUT);
   pinMode(LED_GREEN,OUTPUT); pinMode(LED_YELLOW,OUTPUT);
-  pinMode(SW_BLE,INPUT_PULLUP); pinMode(SW_DEAUTH,INPUT_PULLUP);
-  // SW_TWIN(34)/SW_NRF_CAP(35)/SW_NRF_REP(36): input-only — right pin → 3.3V
-  pinMode(BOOT_BTN,INPUT_PULLUP);
+  pinMode(SW_BLE,    INPUT_PULLUP);
+  pinMode(SW_DEAUTH, INPUT_PULLUP);
+  pinMode(BOOT_BTN,  INPUT_PULLUP);
 
   Wire.begin(OLED_SDA,OLED_SCL);
   if (!display.begin(SSD1306_SWITCHCAPVCC,0x3C)) { Serial.println("OLED fail"); while(1); }
@@ -803,21 +804,19 @@ void loop() {
     currentMode=MODE_IDLE; onModeEnter(MODE_IDLE);
   }
 
-  // Hold = mode cycling (only when no switch active)
-  if (!switchActive()) {
-    if (evtHoldStart) { holdCycleLast=millis(); drawHoldOverlay(); }
-    if (isHolding && millis()-holdCycleLast>=600) {
-      holdCycleIdx=(holdCycleIdx+1)%NUM_CYCLE;
-      holdCycleLast=millis(); drawHoldOverlay();
-    }
-    if (evtHoldEnd) { currentMode=cycleModes[holdCycleIdx]; onModeEnter(currentMode); }
+  // Hold = cycle ALL modes (works regardless of switch state)
+  if (evtHoldStart) { holdCycleLast=millis(); drawHoldOverlay(); }
+  if (isHolding && millis()-holdCycleLast>=600) {
+    holdCycleIdx=(holdCycleIdx+1)%NUM_CYCLE;
+    holdCycleLast=millis(); drawHoldOverlay();
+  }
+  if (evtHoldEnd) { currentMode=cycleModes[holdCycleIdx]; onModeEnter(currentMode); }
 
-    // Triple = exit to idle when using button navigation
-    if (evtTriple && currentMode!=MODE_IDLE) {
-      if (jamActive) jamStop();
-      currentMode=MODE_IDLE; onModeEnter(MODE_IDLE);
-      return;
-    }
+  // Triple = exit to idle
+  if (evtTriple && currentMode!=MODE_IDLE) {
+    if (jamActive) jamStop();
+    currentMode=MODE_IDLE; onModeEnter(MODE_IDLE);
+    return;
   }
 
   switch (currentMode) {
