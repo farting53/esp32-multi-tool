@@ -1,4 +1,4 @@
-# ESP32 Multi-Tool v2.6
+# ESP32 Multi-Tool v2.7
 
 A combined wireless security tool for ESP32 with nRF24L01+PA+LNA, OLED display, LEDs, and toggle switches.
 
@@ -50,8 +50,8 @@ SPDT Slide Switches (only 2 used)
   Middle pin → GND
   Left pin   → GPIO (active LOW = mode ON)
 
-  SW_JAMMER → D32  (GPIO 32) — internal pullup, right pin optional
-  SW_DEAUTH → D33  (GPIO 33) — internal pullup, right pin optional
+  SW_JAMMER    → D32  (GPIO 32) — internal pullup, right pin optional
+  SW_EVIL_TWIN → D33  (GPIO 33) — internal pullup, right pin optional
 ```
 
 ---
@@ -65,7 +65,7 @@ Slide it back to exit and return to idle.
 | Switch | Mode activated |
 |--------|---------------|
 | D32 | Jammer |
-| D33 | WiFi Deauther |
+| D33 | Evil Twin |
 
 > Only one switch should be ON at a time. If multiple are ON, the first one detected wins (order above).
 
@@ -109,13 +109,14 @@ The BOOT button (built into the ESP32 board, labeled BOOT or IO0) handles all in
 | Double (not live) | Launch the twin (clones SSID + BSSID + channel) |
 | Double (live) | Stop the twin |
 | Triple (live) | Open OLED credentials viewer |
-| Triple (button nav) | Exit mode |
+| Triple (not live) | Exit mode |
 
-**OLED Credentials Viewer** (after triple click while live):
+**OLED Credentials Viewer** (triple click while live):
 | Button | Action |
 |--------|--------|
 | Single | Next captured credential |
-| Double or Triple | Back to status screen |
+| Double | Back to status screen |
+| Triple | Back to status screen |
 
 #### Jammer
 **Jammer OFF (target selection):**
@@ -159,10 +160,14 @@ The BOOT button (built into the ESP32 board, labeled BOOT or IO0) handles all in
 ## Evil Twin — Getting the Credentials
 
 ### Option A — OLED (works on any phone including iOS)
-1. Launch Evil Twin (double click after selecting SSID)
-2. Wait for victims to submit the login form (GREEN LED blinks each time)
-3. Triple click → OLED shows captured credentials one at a time
-4. Single click to scroll through them
+1. Flip D33 switch (or hold BOOT → cycle to EVIL TWIN → release)
+2. Wait for scan to finish, single click to pick the target SSID
+3. Double click to launch the twin
+4. Victims connecting see a realistic Free WiFi portal with email/password fields
+5. They try to log in → "User not found" error → they try signing up → both attempts are captured
+6. GREEN LED blinks for each capture
+7. Triple click → OLED shows captured credentials one at a time
+8. Single click to scroll through them, double click to go back
 
 ### Option B — Web page (Android/laptop, not always iOS)
 1. While Evil Twin is live, connect a device to `192.168.4.1`

