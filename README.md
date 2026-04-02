@@ -1,4 +1,4 @@
-# ESP32 Multi-Tool v2.5
+# ESP32 Multi-Tool v2.6
 
 A combined wireless security tool for ESP32 with nRF24L01+PA+LNA, OLED display, LEDs, and toggle switches.
 
@@ -10,16 +10,14 @@ A combined wireless security tool for ESP32 with nRF24L01+PA+LNA, OLED display, 
 |------|-------------|
 | WiFi Deauther | Scans APs and sends 802.11 deauth frames to kick clients off WiFi |
 | Evil Twin | Clones a nearby AP (SSID + BSSID + channel), serves captive portal to harvest credentials |
-| nRF24 Capture | Promiscuous capture of 2.4GHz ESB packets (doorbells, RC cars, remote sockets) |
-| nRF24 Replay | Retransmit captured nRF24 packets |
-| Jammer | nRF24 continuous carrier wave — fixed channel or sweep. Jams nRF24 devices, RC toys, Zigbee, partial WiFi |
+| Jammer | nRF24 continuous carrier wave with selectable target: WiFi, Bluetooth, BLE, RC/Drone, or custom channel |
 
 ---
 
 ## Hardware
 
 - ESP32 dev board
-- 2x nRF24L01+PA+LNA modules (100uF cap across each VCC/GND)
+- 1x nRF24L01+PA+LNA module (100uF cap across VCC/GND)
 - 0.96" SSD1306 OLED display (I2C)
 - 4x LEDs: red, blue, green, yellow (220Ω resistors to GND)
 - 5x SPDT slide switches
@@ -48,16 +46,12 @@ LEDs (220Ω resistor in series to GND)
   GREEN  → D26  (GPIO 26)
   YELLOW → D27  (GPIO 27)
 
-SPDT Slide Switches
+SPDT Slide Switches (only 2 used)
   Middle pin → GND
   Left pin   → GPIO (active LOW = mode ON)
-  Right pin  → 3.3V (required for input-only pins D34/D35/VP)
 
-  SW_BLE     → D32  (GPIO 32) — has internal pullup, right pin optional
-  SW_DEAUTH  → D33  (GPIO 33) — has internal pullup, right pin optional
-  SW_TWIN    → D34  (GPIO 34) — input-only, right pin MUST go to 3V3
-  SW_NRF_CAP → D35  (GPIO 35) — input-only, right pin MUST go to 3V3
-  SW_NRF_REP → VP   (GPIO 36) — input-only, right pin MUST go to 3V3
+  SW_JAMMER → D32  (GPIO 32) — internal pullup, right pin optional
+  SW_DEAUTH → D33  (GPIO 33) — internal pullup, right pin optional
 ```
 
 ---
@@ -123,28 +117,31 @@ The BOOT button (built into the ESP32 board, labeled BOOT or IO0) handles all in
 | Single | Next captured credential |
 | Double or Triple | Back to status screen |
 
-#### nRF24 Capture
-| Button | Action |
-|--------|--------|
-| Single | Channel +1 (0–125) |
-| Double | Channel -1 |
-| Triple | Clear captured packet buffer (or exit if button nav) |
-
-#### nRF24 Replay
-| Button | Action |
-|--------|--------|
-| Single | Next captured packet |
-| Double | Replay selected packet (fires 5x) |
-| Triple | Clear packet buffer (or exit if button nav) |
-
 #### Jammer
+**Jammer OFF (target selection):**
 | Button | Action |
 |--------|--------|
-| Single | Channel +1 |
-| Triple | Channel -1 |
-| Double (1st press) | Start jamming — fixed on selected channel |
-| Double (2nd press) | Switch to sweep mode (hops all 126 channels, 2ms each) |
-| Double (3rd press) | Stop jammer completely |
+| Single | Cycle to next jam target (WIFI → BLUETOOTH → BLE → RC/DRONE → CUSTOM → ...) |
+| Single (CUSTOM target) | Increment channel (+1) |
+| Double | Start jamming selected target |
+| Triple | Exit to idle |
+
+**Jammer ON:**
+| Button | Action |
+|--------|--------|
+| Double | Stop jammer |
+| Single (CUSTOM only) | Increment channel (+1, updates live) |
+| Triple | Stop and exit to idle |
+
+**Jam targets:**
+
+| Target | Channels | Behaviour |
+|--------|----------|-----------|
+| WIFI | nRF24 ch 1–83 (2401–2483 MHz) | Sweeps all 2.4 GHz WiFi channels, 2 ms/hop |
+| BLUETOOTH | nRF24 ch 2–80 (2402–2480 MHz) | Sweeps BT classic range, 1 ms/hop |
+| BLE | ch 2, 26, 80 | Rotates BLE advertising channels, 1 ms/hop |
+| RC/DRONE | nRF24 ch 0–125 (full 2.4 GHz) | Sweeps entire band, 2 ms/hop |
+| CUSTOM | Single channel, you pick | Fixed carrier on chosen channel |
 
 ---
 
@@ -180,21 +177,22 @@ The BOOT button (built into the ESP32 board, labeled BOOT or IO0) handles all in
 
 ---
 
-## Jammer — What it Actually Hits
+## Jammer — What Each Target Hits
 
-| Target | Result |
-|--------|--------|
-| nRF24 devices (doorbells, remote sockets) | Effectively jammed |
-| 2.4GHz RC toys / drones | Effectively jammed |
-| Zigbee / Thread devices | Jammed on overlapping channels |
-| WiFi (specific channel) | Partial interference — use deauther for WiFi disruption |
-| BLE | Not jammed — BLE hops 40 channels at ~1600/sec |
-| Full wideband 2.4GHz jam | Not possible with this hardware |
+| Target | What gets hit | Notes |
+|--------|--------------|-------|
+| WIFI | All 2.4 GHz WiFi (ch 1–13) | Partial interference per channel — use Deauther for clean disconnects |
+| BLUETOOTH | Bluetooth Classic (BR/EDR) | BT hops 79 channels — sweep disrupts but not guaranteed kill |
+| BLE | BLE device discovery / pairing | Hits advertising channels only; established BLE connections survive |
+| RC/DRONE | nRF24 remotes, ESB toys, 2.4G drones | Very effective on fixed-frequency toys |
+| CUSTOM | Single chosen channel | Use for Zigbee (ch 11/15/20/25 → nRF24 ch 5/15/25/30), specific WiFi ch, etc. |
 
-WiFi channel to nRF24 channel reference:
+> The nRF24 cannot do true wideband jamming simultaneously — it transmits on one channel at a time. Sweep mode is effective because most protocols dwell on each channel long enough to be hit.
 
-| WiFi ch | nRF24 ch to target |
-|---------|--------------------|
+WiFi channel to nRF24 channel reference (CUSTOM mode):
+
+| WiFi ch | nRF24 ch |
+|---------|----------|
 | 1 | 12 |
 | 6 | 37 |
 | 11 | 62 |
@@ -217,19 +215,11 @@ WiFi channel to nRF24 channel reference:
    g. Combine with deauth to push clients onto your fake AP
    h. Triple click to view captured creds on OLED
 
-3. To capture and replay an nRF24 device (doorbell etc):
-   a. Flip D35 (NRF Cap) → starts listening
-   b. Single/Double click to tune channel
-   c. Trigger the device (press doorbell etc) → packet captured
-   d. Flip D35 off, flip VP (NRF Replay)
-   e. Double click to replay the packet
-
-4. To jam 2.4GHz RC/drone:
-   a. All switches off → hold BOOT → cycle to JAMMER → release
-   b. Single/Triple click to tune channel
-   c. Double click once → fixed jam
-   d. Double click again → sweep mode (broader)
-   e. Triple click → exit
+3. To jam 2.4GHz RC/drone:
+   a. Flip D32 (JAMMER switch) OR hold BOOT → cycle to JAMMER → release
+   b. Single click to cycle target → select RC/DRONE
+   c. Double click → starts sweep jam across full 2.4 GHz band
+   d. Double click again → stop  /  Triple click → exit
 ```
 
 ---

