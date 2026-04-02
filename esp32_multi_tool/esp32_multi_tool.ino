@@ -181,14 +181,14 @@ class MyBLECB : public BLEAdvertisedDeviceCallbacks {
     strcpy(e.type, "GEN");
 
     if (dev.haveManufacturerData()) {
-      auto mfr = dev.getManufacturerData();
-      if (mfr.size() >= 2) {
+      String mfr = dev.getManufacturerData();
+      if (mfr.length() >= 2) {
         if ((uint8_t)mfr[0] == 0x4C && (uint8_t)mfr[1] == 0x00) strcpy(e.type, "APPLE");
         if ((uint8_t)mfr[0] == 0x07 && (uint8_t)mfr[1] == 0x01) strcpy(e.type, "TILE");
       }
     }
     if (dev.haveServiceUUID()) {
-      std::string uuid = dev.getServiceUUID().toString();
+      String uuid = dev.getServiceUUID().toString();
       if (uuid == "00001812-0000-1000-8000-00805f9b34fb") strcpy(e.type, "HID");
     }
 
