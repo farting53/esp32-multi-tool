@@ -435,9 +435,11 @@ void startTwin() {
   esp_wifi_start();
   delay(100);
 
-  // IP config via Arduino wrapper
+  // Arduino wrapper: sets IP config AND starts the DHCP server.
+  // Without softAP() clients associate but never get an IP address.
   WiFi.softAPConfig(apIP, apIP, IPAddress(255,255,255,0));
-  delay(200); // let AP fully start before DNS
+  WiFi.softAP(twinSSID, "", twinChannel, 0, 4);
+  delay(300); // let AP and DHCP server fully initialise before DNS
 
   wifiInited = false; // will re-init cleanly on next scan
 
